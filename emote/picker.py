@@ -2,7 +2,6 @@ import os
 import time
 from datetime import datetime
 import gi
-from itertools import zip_longest
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango
@@ -19,13 +18,9 @@ from emote import (
 from emote.settings import DEFAULT_SHORTCUTS
 
 GRID_SIZE = 10
-EMOJIS_PER_ROW = 10
+MIN_W = 400
+MIN_H = 300
 SKINTONES = ["✋", "✋🏻", "✋🏼", "✋🏽", "✋🏾", "✋🏿"]
-
-
-def grouper(iterable, n, fillvalue=None):
-    args = [iter(iterable)] * n
-    return zip_longest(*args, fillvalue=fillvalue)
 
 
 def accel_matches(accel, event):
@@ -44,15 +39,22 @@ class EmojiPicker(Gtk.Window):
             self,
             title="Emote",
             window_position=Gtk.WindowPosition.CENTER,
-            resizable=False,
+            resizable=True,
             deletable=False,
             name="emote_window",
+            # Tiling window managers float dialogs; a resizable plain toplevel would be tiled
+            type_hint=Gdk.WindowTypeHint.DIALOG,
         )
-        self.set_default_size(500, 450)
+        self.set_default_size(app.settings.window_width, app.settings.window_height)
+        self.set_size_request(MIN_W, MIN_H)
         self.set_keep_above(True)
         self.app = app
         self.settings = app.settings
         self.shortcut_accels = self.parse_shortcuts()
+        self.user_chosen_size = (
+            self.settings.window_width,
+            self.settings.window_height,
+        )
         self.dialog_open = False
         self.search_scrolled = None
         self.emoji_append_list = []
@@ -60,6 +62,11 @@ class EmojiPicker(Gtk.Window):
         self.first_emoji_widget = None
         self.target_emoji = None
         self.search_debouncer = debouncer.SearchDebouncer(self.search_callback)
+
+        self.maximized_or_fullscreen = False
+        self.connect("window-state-event", self.track_maximized_or_fullscreen)
+        self.connect("size-allocate", self.remember_user_chosen_size)
+        self.connect("destroy", self.save_user_chosen_size)
 
         self.app_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.add(self.app_container)
@@ -93,6 +100,23 @@ class EmojiPicker(Gtk.Window):
                 keyval, mods = Gtk.accelerator_parse(default)
             shortcut_accels[action] = (keyval, mods)
         return shortcut_accels
+
+    def track_maximized_or_fullscreen(self, widget, event):
+        self.maximized_or_fullscreen = bool(
+            event.new_window_state
+            & (Gdk.WindowState.MAXIMIZED | Gdk.WindowState.FULLSCREEN)
+        )
+
+    def remember_user_chosen_size(self, widget, allocation):
+        if not self.maximized_or_fullscreen:
+            self.user_chosen_size = tuple(self.get_size())
+
+    def save_user_chosen_size(self, widget):
+        if self.user_chosen_size != (
+            self.settings.window_width,
+            self.settings.window_height,
+        ):
+            self.app.update_window_size(*self.user_chosen_size)
 
     def init_header(self):
         header = Gtk.HeaderBar(name="header")
@@ -484,7 +508,7 @@ class EmojiPicker(Gtk.Window):
             self.search_scrolled.destroy()
 
         self.search_scrolled = Gtk.ScrolledWindow()
-        self.search_scrolled.set_hexpand(False)
+        self.search_scrolled.set_hexpand(True)
 
         search_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
@@ -517,7 +541,7 @@ class EmojiPicker(Gtk.Window):
             self.app_container.remove(self.category_scrolled)
 
         self.category_scrolled = Gtk.ScrolledWindow()
-        self.category_scrolled.set_hexpand(False)
+        self.category_scrolled.set_hexpand(True)
 
         category = self.selected_emoji_category
 
@@ -547,58 +571,38 @@ class EmojiPicker(Gtk.Window):
 
     def create_emoji_results(self, emojis, for_category=False):
         self.current_emojis = emojis
+        self.first_emoji_widget = None
 
         if len(emojis) > 0:
             self.target_emoji = self.get_skintone_char(emojis[0])
         self.reset_emoji_preview()
 
-        results_grid = Gtk.Grid(
-            orientation=Gtk.Orientation.VERTICAL,
+        results_flow_box = Gtk.FlowBox(
+            selection_mode=Gtk.SelectionMode.NONE,
+            homogeneous=True,
+            min_children_per_line=1,
+            max_children_per_line=64,
+            activate_on_single_click=False,
             margin=GRID_SIZE,
             margin_bottom=0,
             margin_top=GRID_SIZE if for_category else 0,
         )
-        results_grid.set_row_homogeneous(True)
-        results_grid.set_column_homogeneous(True)
 
-        row = 0
+        for index, emoji in enumerate(emojis):
+            btn = Gtk.Button(
+                label=self.get_skintone_char(emoji),
+                name="emoji_button",
+                relief=Gtk.ReliefStyle.NONE,
+            )
+            btn.set_size_request(44, 44)
+            btn.connect("event", self.on_emoji_btn_event)
+            results_flow_box.insert(btn, -1)
+            btn.get_parent().set_can_focus(False)
 
-        for emoji_row in grouper(emojis, EMOJIS_PER_ROW, None):
-            row += 1
-            column = 0
+            if index == 0:
+                self.first_emoji_widget = btn
 
-            for emoji in emoji_row:
-                column += 1
-
-                if emoji is None:
-                    btn = Gtk.Button(
-                        label=" ",
-                        name="emoji_button",
-                        can_focus=False,
-                        relief=Gtk.ReliefStyle.NONE,
-                        sensitive=False,
-                    )
-                else:
-                    btn = Gtk.Button(
-                        label=self.get_skintone_char(emoji),
-                        name="emoji_button",
-                        relief=Gtk.ReliefStyle.NONE,
-                    )
-                    btn.connect("event", self.on_emoji_btn_event)
-
-                if row == 1 and column == 1:
-                    self.first_emoji_widget = btn
-
-                btn.set_size_request(10, 10)
-
-                btn_af = Gtk.AspectFrame(
-                    xalign=0.5, yalign=0.5, ratio=1.0, name="emoji_button_af"
-                )
-                btn_af.add(btn)
-
-                results_grid.attach(btn_af, column, row, 1, 1)
-
-        return results_grid
+        return results_flow_box
 
     def on_emoji_btn_event(self, btn, event):
         emoji = btn.get_label()

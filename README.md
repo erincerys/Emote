@@ -9,7 +9,7 @@ Launch the emoji picker with the configurable keyboard shortcut `Ctrl+Alt+E`, an
 - 🧠 Shows the last used emojis by default
 - 🔎 Search text box automatically focused and ready to type when invoked
 - ⌨️ Can use shortcuts to navigates and select emojis
-- ✒️ Selected emoji automatically pasted to your currently focused app (on X11 only)
+- ✒️ Optionally paste selected emoji into your currently focused app (on X11 only)
 
 ℹ️ Note:
 

@@ -329,7 +329,7 @@ class EmojiPicker(Gtk.Window):
     def open_preferences(self):
         self.dialog_open = True
         preferences_window = preferences.Preferences(
-            self.settings, self.app.update_theme
+            self.settings, self.app.update_theme, self.app.update_auto_paste
         )
         preferences_window.connect("destroy", self.on_close_dialog)
 
@@ -652,7 +652,7 @@ class EmojiPicker(Gtk.Window):
 
         self.destroy()
 
-        if not config.is_wayland:
+        if self.settings.auto_paste and not config.is_wayland:
             time.sleep(0.15)
             os.system("xdotool key ctrl+v")
 

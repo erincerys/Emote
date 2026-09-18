@@ -3,6 +3,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+from emote import config
+
 
 GRID_SIZE = 10
 THEMES = [
@@ -45,7 +47,7 @@ THEMES = [
 
 
 class Preferences(Gtk.Dialog):
-    def __init__(self, settings, update_theme):
+    def __init__(self, settings, update_theme, update_auto_paste):
         Gtk.Dialog.__init__(
             self,
             title="Emote Preferences",
@@ -54,6 +56,7 @@ class Preferences(Gtk.Dialog):
         )
 
         self.update_theme = update_theme
+        self.update_auto_paste = update_auto_paste
 
         header = Gtk.HeaderBar(title="Preferences", show_close_button=True)
         self.set_titlebar(header)
@@ -83,6 +86,22 @@ class Preferences(Gtk.Dialog):
         settings_grid.attach(theme_combo, 2, row, 1, 1)
         row += 1
 
+        auto_paste_label = Gtk.Label("Paste automatically after selecting")
+        auto_paste_label.set_alignment(0, 0.5)
+        settings_grid.attach(auto_paste_label, 1, row, 1, 1)
+
+        auto_paste_switch = Gtk.Switch(
+            active=settings.auto_paste, halign=Gtk.Align.START
+        )
+        if config.is_wayland:
+            auto_paste_switch.set_sensitive(False)
+            auto_paste_switch.set_tooltip_text(
+                "Automatic paste is not available on Wayland"
+            )
+        auto_paste_switch.connect("notify::active", self.on_auto_paste_changed)
+        settings_grid.attach(auto_paste_switch, 2, row, 1, 1)
+        row += 1
+
         box.pack_start(settings_grid, True, True, GRID_SIZE)
 
         self.show_all()
@@ -93,3 +112,6 @@ class Preferences(Gtk.Dialog):
 
         if theme is not None:
             self.update_theme(theme)
+
+    def on_auto_paste_changed(self, switch, _property):
+        self.update_auto_paste(switch.get_active())

@@ -50,13 +50,19 @@ class EmoteApplication(Gtk.Application):
         """Enable autostart in background for flatpak app"""
         try:
             bus = dbus.SessionBus()
-            obj = bus.get_object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop")
+            obj = bus.get_object(
+                "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop"
+            )
             inter = dbus.Interface(obj, "org.freedesktop.portal.Background")
-            res = inter.RequestBackground('', {
-                'reason': 'Emote autostart',
-                'autostart': True, 'background': True,
-                'commandline': dbus.Array(['emote'])
-            })
+            res = inter.RequestBackground(
+                "",
+                {
+                    "reason": "Emote autostart",
+                    "autostart": True,
+                    "background": True,
+                    "commandline": dbus.Array(["emote"]),
+                },
+            )
         except Exception as e:
             print("Failed to enable autostart:", e)
 
@@ -71,7 +77,9 @@ class EmoteApplication(Gtk.Application):
         """Set the GTK theme to be used for the app windows"""
         theme = user_data.load_theme()
 
-        print(f'Setting theme New=[{theme}] Current=[{settings.get_property("gtk-theme-name")}]')
+        print(
+            f'Setting theme New=[{theme}] Current=[{settings.get_property("gtk-theme-name")}]'
+        )
         if theme != user_data.DEFAULT_THEME:
             print(f"Setting theme to {theme}")
             settings.set_property("gtk-theme-name", theme)

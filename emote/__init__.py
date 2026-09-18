@@ -116,6 +116,11 @@ class EmoteApplication(Gtk.Application):
         self.settings.skintone_index = skintone_index
         self.settings.save()
 
+    def update_window_size(self, width, height):
+        self.settings.window_width = width
+        self.settings.window_height = height
+        self.settings.save()
+
     def create_picker_window(self, show_welcome=False):
         if self.picker_window:
             self.picker_window.destroy()

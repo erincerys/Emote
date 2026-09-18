@@ -48,6 +48,36 @@ sudo snap install emote
 
 An unofficial build of Emote is also available in the AUR : https://aur.archlinux.org/packages/emote. This is not maintained by me, so install at your own risk.
 
+## Configuration
+
+Emote stores its settings in a JSON file. The location depends on the installation method:
+
+- Native packages and development installs: `~/.config/emote/settings.json`
+- Flatpak: `~/.var/app/com.tomjwatson.Emote/config/emote/settings.json`
+- Snap: `~/snap/emote/current/.config/emote/settings.json`
+
+The default settings are:
+
+```json
+{
+  "accelerator": "<Primary><Alt>e",
+  "theme": "System Default",
+  "skintone_index": 0,
+  "shown_welcome": false,
+  "auto_paste": true,
+  "window_width": 500,
+  "window_height": 450,
+  "shortcuts": {
+    "focus_search": "<Primary>f",
+    "next_category": "<Primary>Tab",
+    "previous_category": "<Primary><Shift>Tab",
+    "close": "Escape"
+  }
+}
+```
+
+You can edit the file by hand. Emote reloads it the next time the picker opens.
+
 ## 📖 Guide
 
 ### 🚀 Launching

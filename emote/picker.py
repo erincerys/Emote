@@ -10,7 +10,7 @@ from gi.repository.GdkPixbuf import Pixbuf
 from emote import (
     emojis,
     user_data,
-    settings,
+    preferences,
     keyboard_shortcuts,
     guide,
     config,
@@ -19,6 +19,7 @@ from emote import (
 
 GRID_SIZE = 10
 EMOJIS_PER_ROW = 10
+SKINTONES = ["✋", "✋🏻", "✋🏼", "✋🏽", "✋🏾", "✋🏿"]
 
 
 def grouper(iterable, n, fillvalue=None):
@@ -27,7 +28,7 @@ def grouper(iterable, n, fillvalue=None):
 
 
 class EmojiPicker(Gtk.Window):
-    def __init__(self, open_time, update_accelerator, update_theme, show_welcome):
+    def __init__(self, open_time, app, show_welcome):
         Gtk.Window.__init__(
             self,
             title="Emote",
@@ -38,9 +39,9 @@ class EmojiPicker(Gtk.Window):
         )
         self.set_default_size(500, 450)
         self.set_keep_above(True)
+        self.app = app
+        self.settings = app.settings
         self.dialog_open = False
-        self.update_accelerator = update_accelerator
-        self.update_theme = update_theme
         self.search_scrolled = None
         self.emoji_append_list = []
         self.current_emojis = []
@@ -92,11 +93,10 @@ class EmojiPicker(Gtk.Window):
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         items_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
-        if config.is_snap or config.is_dev:
-            prefs_btn = Gtk.ModelButton("Preferences")
-            prefs_btn.set_alignment(0, 0.5)
-            prefs_btn.connect("clicked", lambda prefs_btn: self.open_preferences())
-            items_box.pack_start(prefs_btn, False, True, 0)
+        prefs_btn = Gtk.ModelButton("Preferences")
+        prefs_btn.set_alignment(0, 0.5)
+        prefs_btn.connect("clicked", lambda prefs_btn: self.open_preferences())
+        items_box.pack_start(prefs_btn, False, True, 0)
 
         keyboard_shortcuts_btn = Gtk.ModelButton("Keyboard Shortcuts")
         keyboard_shortcuts_btn.set_alignment(0, 0.5)
@@ -137,10 +137,10 @@ class EmojiPicker(Gtk.Window):
         skintone_combo.set_entry_text_column(0)
         skintone_combo.connect("changed", self.on_skintone_combo_changed)
 
-        for skintone in user_data.SKINTONES:
+        for skintone in SKINTONES:
             skintone_combo.append_text(skintone)
 
-        skintone_combo.set_active(user_data.load_skintone_index())
+        skintone_combo.set_active(self.settings.skintone_index)
 
         return skintone_combo
 
@@ -163,7 +163,7 @@ class EmojiPicker(Gtk.Window):
             skintone_index = 5
 
         if skintone_index is not None:
-            user_data.update_skintone_index(skintone_index)
+            self.app.update_skintone_index(skintone_index)
 
             query = self.search_entry.props.text
 
@@ -257,7 +257,7 @@ class EmojiPicker(Gtk.Window):
         if emoji["skintone"] is None:
             return char
 
-        skintone = user_data.load_skintone_index()
+        skintone = self.settings.skintone_index
 
         if skintone == 0:
             return char
@@ -328,13 +328,15 @@ class EmojiPicker(Gtk.Window):
 
     def open_preferences(self):
         self.dialog_open = True
-        settings_window = settings.Settings(self.update_theme)
-        settings_window.connect("destroy", self.on_close_dialog)
+        preferences_window = preferences.Preferences(
+            self.settings, self.app.update_theme
+        )
+        preferences_window.connect("destroy", self.on_close_dialog)
 
     def open_keyboard_shortcuts(self):
         self.dialog_open = True
         keyboard_shortcuts_window = keyboard_shortcuts.KeyboardShortcuts(
-            self.update_accelerator
+            self.settings, self.app.update_accelerator
         )
         keyboard_shortcuts_window.connect("destroy", self.on_close_dialog)
 
@@ -359,7 +361,9 @@ class EmojiPicker(Gtk.Window):
             logo=logo,
             program_name="Emote",
             title="About Emote",
-            version=os.environ.get("FLATPAK_APP_VERSION", os.environ.get("SNAP_VERSION", "dev build")),
+            version=os.environ.get(
+                "FLATPAK_APP_VERSION", os.environ.get("SNAP_VERSION", "dev build")
+            ),
             authors=["Tom Watson", "Vincent Emonet"],
             artists=["Tom Watson, Matthew Wong"],
             documenters=["Irene Auñón"],

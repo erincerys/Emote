@@ -1,6 +1,11 @@
 build
-dist
 *.egg-info
+
+/dist/*/src/
+/dist/*/pkg/
+/dist/*/Emote/
+/dist/*/*.tar.gz
+/dist/*/*.pkg.tar.zst
 .venv
 venv
 *.snap

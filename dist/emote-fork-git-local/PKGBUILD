@@ -1,0 +1,43 @@
+# Maintainer: erin
+# Contributor: Rhinoceros <https://aur.archlinux.org/account/rhinoceros>
+# Contributor: Luke Arms <luke@arms.to>
+
+pkgname=emote-fork-git
+_pkgname=Emote
+pkgver=4.2.0.r1.gd5daccd
+pkgrel=1
+pkgdesc='Modern popup emoji picker (erincerys fork)'
+arch=('any')
+url='https://github.com/erincerys/Emote'
+license=('GPL-3.0-only')
+depends=('python' 'gtk3' 'python-gobject' 'libkeybinder3' 'python-setproctitle' 'dbus-python' 'hicolor-icon-theme' 'emoji-font')
+makedepends=('git' 'meson')
+optdepends=('xdotool: automatic pasting in X11'
+            'wl-clipboard: automatic copying in Wayland')
+provides=('emote')
+conflicts=('emote' 'emote-fork')
+source=("$_pkgname::git+file://${startdir}/../..#branch=master")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/^v//; s/\([^-]*-g\)/r\1/; s/-/./g'
+}
+
+prepare() {
+  cd "$_pkgname"
+  sed -Ei '/^X-(Flatpak|GNOME-Autostart-enabled)=/d' static/com.tomjwatson.Emote.desktop
+}
+
+build() {
+  PATH=/usr/bin:$PATH arch-meson "$_pkgname" build
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm 644 "$_pkgname/LICENSE.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
+  # Start automatically by default
+  install -Dm 644 "$pkgdir/usr/share/applications/com.tomjwatson.Emote.desktop" "$pkgdir/etc/xdg/autostart/com.tomjwatson.Emote.desktop"
+  rm -r "$pkgdir"/usr/share/emote/emote/{emote.in,meson.build} "$pkgdir"/usr/share/emote/static/meson.build
+}

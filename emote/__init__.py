@@ -112,6 +112,10 @@ class EmoteApplication(Gtk.Application):
         self.settings.save()
         self.set_theme()
 
+    def update_auto_paste(self, auto_paste):
+        self.settings.auto_paste = auto_paste
+        self.settings.save()
+
     def update_skintone_index(self, skintone_index):
         self.settings.skintone_index = skintone_index
         self.settings.save()

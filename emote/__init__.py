@@ -2,16 +2,15 @@ import dbus
 import os
 import sys
 import gi
-import shutil
 from setproctitle import setproctitle
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Keybinder", "3.0")
 from gi.repository import Gtk, Keybinder
 
-from emote import picker, css, emojis, user_data, config
+from emote import picker, css, emojis, settings, config
 
-settings = Gtk.Settings.get_default()
+gtk_settings = Gtk.Settings.get_default()
 
 
 class EmoteApplication(Gtk.Application):
@@ -23,6 +22,7 @@ class EmoteApplication(Gtk.Application):
 
     def start_daemon(self):
         setproctitle("emote")
+        self.settings = settings.load()
 
         if not config.is_wayland:
             Keybinder.init()
@@ -35,9 +35,10 @@ class EmoteApplication(Gtk.Application):
 
         # The first time the app launches, open the picker and show the
         # guide
-        if not user_data.load_shown_welcome():
+        if not self.settings.shown_welcome:
             self.create_picker_window(True)
-            user_data.update_shown_welcome()
+            self.settings.shown_welcome = True
+            self.settings.save()
 
         if config.is_flatpak:
             self.flatpak_autostart()
@@ -68,29 +69,28 @@ class EmoteApplication(Gtk.Application):
 
     def set_accelerator(self):
         """Register global shortcut for invoking the emoji picker"""
-        accel_string, _ = user_data.load_accelerator()
+        accel_string = self.settings.accelerator
 
         if accel_string:
             Keybinder.bind(accel_string, self.handle_accelerator)
 
     def set_theme(self):
         """Set the GTK theme to be used for the app windows"""
-        theme = user_data.load_theme()
+        theme = self.settings.theme
 
         print(
-            f'Setting theme New=[{theme}] Current=[{settings.get_property("gtk-theme-name")}]'
+            f"Setting theme New=[{theme}] "
+            f'Current=[{gtk_settings.get_property("gtk-theme-name")}]'
         )
-        if theme != user_data.DEFAULT_THEME:
+        if theme != settings.DEFAULT_THEME:
             print(f"Setting theme to {theme}")
-            settings.set_property("gtk-theme-name", theme)
+            gtk_settings.set_property("gtk-theme-name", theme)
         else:
-            settings.reset_property("gtk-theme-name")
+            gtk_settings.reset_property("gtk-theme-name")
 
-    def unset_accelerator(self):
-        old_accel_string, _ = user_data.load_accelerator()
-
-        if old_accel_string:
-            Keybinder.unbind(old_accel_string)
+    def unset_accelerator(self, accel_string):
+        if accel_string:
+            Keybinder.unbind(accel_string)
 
     def handle_accelerator(self, keystring):
         if self.picker_window:
@@ -98,24 +98,37 @@ class EmoteApplication(Gtk.Application):
         else:
             self.create_picker_window()
 
-    def update_accelerator(self, accel_string, accel_label):
-        print(f"Updating global shortcut to {accel_label}")
-        self.unset_accelerator()
-        user_data.update_accelerator(accel_string, accel_label)
+    def update_accelerator(self, accel_string):
+        accel_string = accel_string or ""
+        accel_label = Gtk.accelerator_get_label(*Gtk.accelerator_parse(accel_string))
+        print(f"Updating global shortcut to {accel_label or 'none'}")
+        self.unset_accelerator(self.settings.accelerator)
+        self.settings.accelerator = accel_string
+        self.settings.save()
         self.set_accelerator()
 
     def update_theme(self, theme):
-        user_data.update_theme(theme)
+        self.settings.theme = theme
+        self.settings.save()
         self.set_theme()
+
+    def update_skintone_index(self, skintone_index):
+        self.settings.skintone_index = skintone_index
+        self.settings.save()
 
     def create_picker_window(self, show_welcome=False):
         if self.picker_window:
             self.picker_window.destroy()
+
+        old_accelerator = self.settings.accelerator
+        self.settings = settings.load()
+        if not config.is_wayland and self.settings.accelerator != old_accelerator:
+            self.unset_accelerator(old_accelerator)
+            self.set_accelerator()
+        self.set_theme()
+
         self.picker_window = picker.EmojiPicker(
-            Keybinder.get_current_event_time(),
-            self.update_accelerator,
-            self.update_theme,
-            show_welcome,
+            Keybinder.get_current_event_time(), self, show_welcome
         )
         self.picker_window.connect("destroy", self.handle_picker_destroy)
 

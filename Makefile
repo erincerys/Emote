@@ -1,11 +1,14 @@
 OS := $(shell uname)
-.PHONY: dev dev-debug install update-emojis flatpak flatpak-install flatpak-requirements flatpak-validate flatpak-clean flathub snap snap-clean
+.PHONY: dev dev-debug test install update-emojis flatpak flatpak-install flatpak-requirements flatpak-validate flatpak-clean flathub snap snap-clean
 
 dev:
 	ENV=dev GDK_BACKEND="x11" pipenv run start
 
 dev-debug:
 	GTK_DEBUG=interactive GDK_BACKEND="x11" ENV=dev pipenv run start
+
+test:
+	pipenv run pytest
 
 format:
 	pipenv run black emote

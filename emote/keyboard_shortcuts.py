@@ -2,7 +2,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
-from emote import config, user_data
+from emote import config
 from emote.keybinding import ButtonKeybinding
 
 
@@ -10,7 +10,7 @@ GRID_SIZE = 10
 
 
 class KeyboardShortcuts(Gtk.Dialog):
-    def __init__(self, update_accelerator):
+    def __init__(self, settings, update_accelerator):
         Gtk.Dialog.__init__(
             self,
             title="Emote Keyboard Shortcuts",
@@ -43,8 +43,7 @@ class KeyboardShortcuts(Gtk.Dialog):
             open_keybinding.set_size_request(150, -1)
             open_keybinding.connect("accel-edited", self.on_kb_changed)
             open_keybinding.connect("accel-cleared", self.on_kb_changed)
-            accel_string, _ = user_data.load_accelerator()
-            open_keybinding.set_accel_string(accel_string)
+            open_keybinding.set_accel_string(settings.accelerator)
             shortcuts_grid.attach(open_keybinding, 2, row, 1, 1)
             row += 1
 
@@ -89,4 +88,4 @@ class KeyboardShortcuts(Gtk.Dialog):
         self.present()
 
     def on_kb_changed(self, button_keybinding, accel_string=None, accel_label=None):
-        self.update_accelerator(accel_string, accel_label)
+        self.update_accelerator(accel_string)

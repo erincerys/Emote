@@ -17,7 +17,7 @@ optdepends=('xdotool: automatic pasting in X11'
 provides=('emote')
 conflicts=('emote' 'emote-fork-git')
 source=("$_pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('b10cc5ff6fa4944ffb659eef1aa4429c166b9af3d991cd915330d9b1f293e6cb')
 
 prepare() {
   cd "$_pkgname-$pkgver"

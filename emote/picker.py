@@ -16,6 +16,7 @@ from emote import (
     config,
     debouncer,
 )
+from emote.settings import DEFAULT_SHORTCUTS
 
 GRID_SIZE = 10
 EMOJIS_PER_ROW = 10
@@ -25,6 +26,16 @@ SKINTONES = ["✋", "✋🏻", "✋🏼", "✋🏽", "✋🏾", "✋🏿"]
 def grouper(iterable, n, fillvalue=None):
     args = [iter(iterable)] * n
     return zip_longest(*args, fillvalue=fillvalue)
+
+
+def accel_matches(accel, event):
+    keyval, mods = accel
+    event_keyval = Gdk.keyval_to_lower(event.keyval)
+    if event_keyval == Gdk.KEY_ISO_Left_Tab:
+        event_keyval = Gdk.KEY_Tab
+    event_mods = event.state & Gtk.accelerator_get_default_mod_mask()
+
+    return event_keyval == keyval and event_mods == mods
 
 
 class EmojiPicker(Gtk.Window):
@@ -41,6 +52,7 @@ class EmojiPicker(Gtk.Window):
         self.set_keep_above(True)
         self.app = app
         self.settings = app.settings
+        self.shortcut_accels = self.parse_shortcuts()
         self.dialog_open = False
         self.search_scrolled = None
         self.emoji_append_list = []
@@ -67,6 +79,20 @@ class EmojiPicker(Gtk.Window):
         GLib.timeout_add(500, self.register_window_state_event_handler)
 
         self.connect("key-press-event", self.on_key_press_event)
+
+    def parse_shortcuts(self):
+        shortcut_accels = {}
+        for action, default in DEFAULT_SHORTCUTS.items():
+            accel_string = self.settings.shortcuts[action]
+            keyval, mods = Gtk.accelerator_parse(accel_string)
+            if keyval == 0:
+                print(
+                    f"Warning: could not parse shortcut {action}={accel_string!r}; "
+                    f"using {default!r}"
+                )
+                keyval, mods = Gtk.accelerator_parse(default)
+            shortcut_accels[action] = (keyval, mods)
+        return shortcut_accels
 
     def init_header(self):
         header = Gtk.HeaderBar(name="header")
@@ -306,25 +332,19 @@ class EmojiPicker(Gtk.Window):
             self.destroy()
 
     def on_key_press_event(self, widget, event):
-        keyval = event.keyval
-        keyval_name = Gdk.keyval_name(keyval)
-        state = event.state
-        ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
-        shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
-        tab = keyval_name == "Tab" or keyval_name == "ISO_Left_Tab"
+        actions = {
+            "focus_search": self.search_entry.grab_focus,
+            "next_category": self.on_cycle_category,
+            "previous_category": lambda: self.on_cycle_category(True),
+            "close": self.destroy,
+        }
 
-        if ctrl and keyval_name == "f":
-            self.search_entry.grab_focus()
-        elif ctrl and shift and tab:
-            self.on_cycle_category(True)
-        elif ctrl and tab:
-            self.on_cycle_category()
-        elif keyval_name == "Escape":
-            self.destroy()
-        else:
-            return False
+        for action, method in actions.items():
+            if accel_matches(self.shortcut_accels[action], event):
+                method()
+                return True
 
-        return True
+        return False
 
     def open_preferences(self):
         self.dialog_open = True

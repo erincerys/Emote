@@ -6,12 +6,17 @@
   padding-right: 5px;
 }
 
+#emoji_grid flowboxchild {
+  padding: 2px;
+}
+
 #emoji_button {
   font-size: 24px;
+  min-width: 0;
   padding-top: 7px;
   padding-bottom: 7px;
-  padding-left: 7px;
-  padding-right: 7px;
+  padding-left: 6px;
+  padding-right: 6px;
 }
 
 #emoji_button:hover label {

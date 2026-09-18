@@ -576,6 +576,7 @@ class EmojiPicker(Gtk.Window):
         self.reset_emoji_preview()
 
         results_flow_box = Gtk.FlowBox(
+            name="emoji_grid",
             selection_mode=Gtk.SelectionMode.NONE,
             homogeneous=True,
             min_children_per_line=1,

@@ -509,6 +509,7 @@ class EmojiPicker(Gtk.Window):
 
         self.search_scrolled = Gtk.ScrolledWindow()
         self.search_scrolled.set_hexpand(True)
+        self.search_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
         search_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
@@ -542,6 +543,9 @@ class EmojiPicker(Gtk.Window):
 
         self.category_scrolled = Gtk.ScrolledWindow()
         self.category_scrolled.set_hexpand(True)
+        self.category_scrolled.set_policy(
+            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC
+        )
 
         category = self.selected_emoji_category
 

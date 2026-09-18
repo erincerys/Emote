@@ -1,9 +1,10 @@
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import Gtk, GLib
 from emote import config
 from emote.keybinding import ButtonKeybinding
+from emote.settings import SETTINGS_PATH
 
 
 GRID_SIZE = 10
@@ -64,25 +65,45 @@ class KeyboardShortcuts(Gtk.Dialog):
         search_label = Gtk.Label("Focus Search")
         search_label.set_alignment(0, 0.5)
         shortcuts_grid.attach(search_label, 1, row, 1, 1)
-        search_shortcut = Gtk.ShortcutsShortcut(accelerator="<Ctrl>+F")
+        search_shortcut = Gtk.ShortcutsShortcut(
+            accelerator=settings.shortcuts["focus_search"]
+        )
         shortcuts_grid.attach(search_shortcut, 2, row, 1, 1)
         row += 1
 
         next_cat_label = Gtk.Label("Next Emoji Category")
         next_cat_label.set_alignment(0, 0.5)
         shortcuts_grid.attach(next_cat_label, 1, row, 1, 1)
-        next_cat_shortcut = Gtk.ShortcutsShortcut(accelerator="<Ctrl>+Tab")
+        next_cat_shortcut = Gtk.ShortcutsShortcut(
+            accelerator=settings.shortcuts["next_category"]
+        )
         shortcuts_grid.attach(next_cat_shortcut, 2, row, 1, 1)
         row += 1
 
         prev_cat_label = Gtk.Label("Previous Emoji Category")
         prev_cat_label.set_alignment(0, 0.5)
         shortcuts_grid.attach(prev_cat_label, 1, row, 1, 1)
-        prev_cat_label = Gtk.ShortcutsShortcut(accelerator="<Ctrl>+<Shift>+Tab")
-        shortcuts_grid.attach(prev_cat_label, 2, row, 1, 1)
+        prev_cat_shortcut = Gtk.ShortcutsShortcut(
+            accelerator=settings.shortcuts["previous_category"]
+        )
+        shortcuts_grid.attach(prev_cat_shortcut, 2, row, 1, 1)
         row += 1
 
+        close_label = Gtk.Label("Close Emoji Picker")
+        close_label.set_alignment(0, 0.5)
+        shortcuts_grid.attach(close_label, 1, row, 1, 1)
+        close_shortcut = Gtk.ShortcutsShortcut(accelerator=settings.shortcuts["close"])
+        shortcuts_grid.attach(close_shortcut, 2, row, 1, 1)
+
         box.pack_start(shortcuts_grid, True, True, GRID_SIZE)
+
+        settings_path_label = Gtk.Label()
+        escaped_settings_path = GLib.markup_escape_text(str(SETTINGS_PATH))
+        settings_path_label.set_markup(
+            f"<small>Edit in {escaped_settings_path}</small>"
+        )
+        settings_path_label.set_selectable(True)
+        box.pack_start(settings_path_label, False, False, GRID_SIZE)
 
         self.show_all()
         self.present()

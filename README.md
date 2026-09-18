@@ -77,6 +77,10 @@ The default settings are:
 ```
 
 You can edit the file by hand. Emote reloads it the next time the picker opens.
+The four entries in `shortcuts` control focusing search, moving to the next or
+previous category, and closing the picker. Shortcut values use GTK accelerator
+syntax. Write modifiers as `<Primary>`, `<Shift>`, `<Alt>`, or `<Super>`, followed
+by a keyval name such as `Tab`, `Escape`, or `n`.
 
 ## 📖 Guide
 

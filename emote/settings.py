@@ -12,6 +12,8 @@ CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
 SETTINGS_PATH = CONFIG_HOME / "emote" / "settings.json"
 
 DEFAULT_THEME = "System Default"
+MIN_EMOJI_SIZE = 16
+MAX_EMOJI_SIZE = 64
 DEFAULT_SHORTCUTS = {
     "focus_search": "<Primary>f",
     "next_category": "<Primary>Tab",
@@ -36,6 +38,7 @@ class Settings:
     auto_paste: bool = True
     window_width: int = 500
     window_height: int = 450
+    emoji_size: int = 24
     shortcuts: dict = field(default_factory=lambda: DEFAULT_SHORTCUTS.copy())
 
     _corrupt = False
@@ -74,6 +77,11 @@ def _from_dict(data):
     for key, value in list(values.items()):
         if type(value) is not type(getattr(defaults, key)):
             del values[key]
+
+    if "emoji_size" in values:
+        values["emoji_size"] = min(
+            max(values["emoji_size"], MIN_EMOJI_SIZE), MAX_EMOJI_SIZE
+        )
 
     if "shortcuts" in values:
         shortcuts = {

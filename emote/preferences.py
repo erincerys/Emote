@@ -4,6 +4,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
 from emote import config
+from emote.settings import MAX_EMOJI_SIZE, MIN_EMOJI_SIZE
 
 
 GRID_SIZE = 10
@@ -47,7 +48,7 @@ THEMES = [
 
 
 class Preferences(Gtk.Dialog):
-    def __init__(self, settings, update_theme, update_auto_paste):
+    def __init__(self, settings, update_theme, update_auto_paste, update_emoji_size):
         Gtk.Dialog.__init__(
             self,
             title="Emote Preferences",
@@ -57,6 +58,7 @@ class Preferences(Gtk.Dialog):
 
         self.update_theme = update_theme
         self.update_auto_paste = update_auto_paste
+        self.update_emoji_size = update_emoji_size
 
         header = Gtk.HeaderBar(title="Preferences", show_close_button=True)
         self.set_titlebar(header)
@@ -102,6 +104,19 @@ class Preferences(Gtk.Dialog):
         settings_grid.attach(auto_paste_switch, 2, row, 1, 1)
         row += 1
 
+        emoji_size_label = Gtk.Label("Emoji size")
+        emoji_size_label.set_alignment(0, 0.5)
+        settings_grid.attach(emoji_size_label, 1, row, 1, 1)
+
+        emoji_size_spin = Gtk.SpinButton.new_with_range(
+            MIN_EMOJI_SIZE, MAX_EMOJI_SIZE, 1
+        )
+        emoji_size_spin.set_value(settings.emoji_size)
+        emoji_size_spin.set_halign(Gtk.Align.START)
+        emoji_size_spin.connect("value-changed", self.on_emoji_size_changed)
+        settings_grid.attach(emoji_size_spin, 2, row, 1, 1)
+        row += 1
+
         box.pack_start(settings_grid, True, True, GRID_SIZE)
 
         self.show_all()
@@ -115,3 +130,6 @@ class Preferences(Gtk.Dialog):
 
     def on_auto_paste_changed(self, switch, _property):
         self.update_auto_paste(switch.get_active())
+
+    def on_emoji_size_changed(self, spin):
+        self.update_emoji_size(spin.get_value_as_int())

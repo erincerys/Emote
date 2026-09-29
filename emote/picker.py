@@ -373,7 +373,10 @@ class EmojiPicker(Gtk.Window):
     def open_preferences(self):
         self.dialog_open = True
         preferences_window = preferences.Preferences(
-            self.settings, self.app.update_theme, self.app.update_auto_paste
+            self.settings,
+            self.app.update_theme,
+            self.app.update_auto_paste,
+            self.app.update_emoji_size,
         )
         preferences_window.connect("destroy", self.on_close_dialog)
 
@@ -593,7 +596,6 @@ class EmojiPicker(Gtk.Window):
                 name="emoji_button",
                 relief=Gtk.ReliefStyle.NONE,
             )
-            btn.set_size_request(44, 44)
             btn.connect("event", self.on_emoji_btn_event)
             results_flow_box.insert(btn, -1)
             btn.get_parent().set_can_focus(False)

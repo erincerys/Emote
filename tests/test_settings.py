@@ -33,6 +33,7 @@ def test_round_trip(settings_path):
         auto_paste=False,
         window_width=640,
         window_height=480,
+        emoji_size=32,
         shortcuts={
             "focus_search": "slash",
             "next_category": "Page_Down",
@@ -69,12 +70,28 @@ def test_wrong_types_fall_back_to_defaults(settings_path):
                 "auto_paste": "yes",
                 "window_width": True,
                 "window_height": 450.0,
+                "emoji_size": "32",
                 "shortcuts": [],
             }
         )
     )
 
     assert settings_module.load() == settings_module.Settings()
+
+
+@pytest.mark.parametrize(
+    "stored, expected",
+    [
+        (1, settings_module.MIN_EMOJI_SIZE),
+        (500, settings_module.MAX_EMOJI_SIZE),
+        (40, 40),
+    ],
+)
+def test_emoji_size_is_clamped(settings_path, stored, expected):
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"emoji_size": stored}))
+
+    assert settings_module.load().emoji_size == expected
 
 
 def test_partial_shortcuts_are_merged_with_defaults(settings_path):

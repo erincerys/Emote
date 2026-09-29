@@ -29,6 +29,7 @@ class EmoteApplication(Gtk.Application):
             self.set_accelerator()
 
         css.load_css()
+        css.set_emoji_size(self.settings.emoji_size)
         emojis.init()
 
         self.activated = True
@@ -116,6 +117,11 @@ class EmoteApplication(Gtk.Application):
         self.settings.auto_paste = auto_paste
         self.settings.save()
 
+    def update_emoji_size(self, emoji_size):
+        self.settings.emoji_size = emoji_size
+        self.settings.save()
+        css.set_emoji_size(emoji_size)
+
     def update_skintone_index(self, skintone_index):
         self.settings.skintone_index = skintone_index
         self.settings.save()
@@ -135,6 +141,7 @@ class EmoteApplication(Gtk.Application):
             self.unset_accelerator(old_accelerator)
             self.set_accelerator()
         self.set_theme()
+        css.set_emoji_size(self.settings.emoji_size)
 
         self.picker_window = picker.EmojiPicker(
             Keybinder.get_current_event_time(), self, show_welcome

@@ -1,132 +1,70 @@
-import json
-import os
-from dataclasses import asdict, dataclass, field, fields
-from pathlib import Path
-import shelve
-import tempfile
+import gi
 
-from emote import user_data
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gtk
 
-
-CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-SETTINGS_PATH = CONFIG_HOME / "emote" / "settings.json"
-
-DEFAULT_THEME = "System Default"
-MIN_EMOJI_SIZE = 16
-MAX_EMOJI_SIZE = 64
-DEFAULT_SHORTCUTS = {
-    "focus_search": "<Primary>f",
-    "next_category": "<Primary>Tab",
-    "previous_category": "<Primary><Shift>Tab",
-    "close": "Escape",
-}
-
-LEGACY_KEYS = {
-    "accelerator": "accelerator_string",
-    "theme": "theme",
-    "skintone_index": "skintone_index",
-    "shown_welcome": "shown_welcome",
-}
+from emote import config, user_data
 
 
-@dataclass
-class Settings:
-    accelerator: str = "<Primary><Alt>e"
-    theme: str = DEFAULT_THEME
-    skintone_index: int = 0
-    shown_welcome: bool = False
-    auto_paste: bool = True
-    window_width: int = 500
-    window_height: int = 450
-    emoji_size: int = 24
-    shortcuts: dict = field(default_factory=lambda: DEFAULT_SHORTCUTS.copy())
+class Settings(Adw.PreferencesDialog):
+    def __init__(self, picker):
+        super().__init__(title="Preferences", search_enabled=False)
+        self.picker = picker
+        self._refreshing_auto_paste = False
+        self.set_content_width(390)
+        self.set_content_height(390 if config.is_wayland else 340)
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup()
+        page.add(group)
+        self.add(page)
 
-    _corrupt = False
-
-    def save(self):
-        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-        if self._corrupt and SETTINGS_PATH.exists():
-            os.replace(SETTINGS_PATH, SETTINGS_PATH.with_suffix(".json.bak"))
-
-        temp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=SETTINGS_PATH.parent,
-                prefix=f".{SETTINGS_PATH.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temp_file:
-                temp_path = Path(temp_file.name)
-                json.dump(asdict(self), temp_file, indent=2)
-                temp_file.write("\n")
-            os.replace(temp_path, SETTINGS_PATH)
-            self._corrupt = False
-        finally:
-            if temp_path is not None and temp_path.exists():
-                temp_path.unlink()
-
-
-def _from_dict(data):
-    defaults = Settings()
-    field_names = {setting_field.name for setting_field in fields(Settings)}
-    values = {key: value for key, value in data.items() if key in field_names}
-
-    for key, value in list(values.items()):
-        if type(value) is not type(getattr(defaults, key)):
-            del values[key]
-
-    if "emoji_size" in values:
-        values["emoji_size"] = min(
-            max(values["emoji_size"], MIN_EMOJI_SIZE), MAX_EMOJI_SIZE
+        tone = Adw.ComboRow(
+            title="Skin tone", model=Gtk.StringList.new(user_data.SKINTONES)
         )
+        tone.set_selected(user_data.load_skintone_index())
+        tone.connect("notify::selected", self.on_tone_changed)
+        group.add(tone)
 
-    if "shortcuts" in values:
-        shortcuts = {
-            key: value
-            for key, value in values["shortcuts"].items()
-            if key in defaults.shortcuts and type(value) is str
-        }
-        values["shortcuts"] = {**defaults.shortcuts, **shortcuts}
+        size = Adw.ComboRow(
+            title="Emoji size", model=Gtk.StringList.new(user_data.EMOJI_SIZE_LABELS)
+        )
+        size.set_selected(user_data.EMOJI_SIZES.index(picker.emoji_size))
+        size.connect("notify::selected", self.on_size_changed)
+        group.add(size)
 
-    return Settings(**values)
+        paste_group = Adw.PreferencesGroup()
+        page.add(paste_group)
+        self.auto_paste = Adw.SwitchRow(
+            title="Automatic paste",
+            subtitle="Paste emojis into the app you were using",
+        )
+        enabled = (
+            user_data.load_wayland_auto_paste_choice() is True
+            if config.is_wayland
+            else user_data.load_x11_auto_paste_enabled()
+        )
+        self.auto_paste.set_active(enabled)
+        self.auto_paste.connect("notify::active", self.on_auto_paste_changed)
+        paste_group.add(self.auto_paste)
 
+    def on_size_changed(self, row, _property):
+        self.picker.set_emoji_size(user_data.EMOJI_SIZES[row.get_selected()])
 
-def _shelve_exists():
-    path = Path(user_data.SHELVE_PATH)
-    return path.exists() or any(path.parent.glob(f"{path.name}.*"))
+    def on_tone_changed(self, row, _property):
+        self.picker.set_skin_tone(row.get_selected())
 
+    def on_auto_paste_changed(self, row, _property):
+        if not self._refreshing_auto_paste:
+            if config.is_wayland:
+                self.picker.get_application().set_wayland_auto_paste(row.get_active())
+            else:
+                user_data.update_x11_auto_paste_enabled(row.get_active())
 
-def _migrate():
-    with shelve.open(str(user_data.SHELVE_PATH), flag="r") as legacy_data:
-        values = {
-            field_name: legacy_data[legacy_key]
-            for field_name, legacy_key in LEGACY_KEYS.items()
-            if legacy_key in legacy_data
-        }
-
-    migrated = _from_dict(values)
-    migrated.save()
-    return migrated
-
-
-def load():
-    if not SETTINGS_PATH.exists():
-        if _shelve_exists():
-            return _migrate()
-        return Settings()
-
-    try:
-        with SETTINGS_PATH.open(encoding="utf-8") as settings_file:
-            data = json.load(settings_file)
-        if not isinstance(data, dict):
-            raise ValueError("settings must be a JSON object")
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
-        print(f"Warning: could not parse {SETTINGS_PATH}: {error}")
-        defaults = Settings()
-        defaults._corrupt = True
-        return defaults
-
-    return _from_dict(data)
+    def refresh_wayland_auto_paste(self):
+        enabled = user_data.load_wayland_auto_paste_choice() is True
+        self._refreshing_auto_paste = True
+        try:
+            self.auto_paste.set_active(enabled)
+        finally:
+            self._refreshing_auto_paste = False

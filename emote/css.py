@@ -1,33 +1,19 @@
+from pathlib import Path
+
 import gi
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk
-from emote import config
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gdk, Gtk
 
-emoji_size_provider = Gtk.CssProvider()
+from emote import config
 
 
 def load_css():
-    """
-    Load associated CSS for the window.
-    """
-    css_provider = Gtk.CssProvider()
-
-    css_provider.load_from_path(f"{config.static_dir}/style.css")
-
-    screen = Gdk.Screen.get_default()
-    styleContext = Gtk.StyleContext()
-    styleContext.add_provider_for_screen(
-        screen, css_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
-    )
-    styleContext.add_provider_for_screen(
-        screen, emoji_size_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1
-    )
-
-
-def set_emoji_size(size):
-    cell = size + 5
-    emoji_size_provider.load_from_data(
-        f"#emoji_button {{ font-size: {size}px; "
-        f"min-width: {cell}px; min-height: {cell}px; }}".encode()
+    provider = Gtk.CssProvider()
+    provider.load_from_path(f"{config.static_dir}/style.css")
+    icon_root = Path(config.static_dir).resolve() / "icons"
+    icon_theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+    icon_theme.add_search_path(str(icon_root))
+    Gtk.StyleContext.add_provider_for_display(
+        Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
     )

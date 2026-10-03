@@ -6,37 +6,41 @@
   <url type="homepage">https://github.com/tom-james-watson/Emote</url>
   <url type="bugtracker">https://github.com/tom-james-watson/Emote/issues</url>
   <url type="vcs-browser">https://github.com/tom-james-watson/Emote</url>
+  <url type="help">https://github.com/tom-james-watson/Emote/wiki/Hotkey-In-Wayland</url>
 
   <metadata_license>FSFAP</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <developer_name translatable="no">Tom Watson</developer_name>
+  <developer id="com.tomjwatson">
+    <name translatable="no">Tom Watson</name>
+  </developer>
 
   <description>
     <p>
-      Emote is a modern emoji picker for Linux 🚀
+      Modern popup emoji picker for Linux with fast search, category navigation, and keyboard control.
     </p>
     <p>
-      Written in GTK3, Emote is lightweight and stays out of your way.
+      Written in GTK4, Emote offers a continuous emoji catalogue with category navigation.
     </p>
     <p>
-      Launch the emoji picker with the configurable keyboard shortcut `Ctrl+Alt+E`, and select one or more emojis to paste them into the currently focused app.
+      On X11, launch the picker with the configurable keyboard shortcut Ctrl+Alt+E. On supported Wayland desktops, Emote can register Ctrl+Alt+E through the Global Shortcuts portal. Selected emojis are copied to the clipboard and, when automatic paste is enabled, pasted into the previously focused app.
     </p>
     <ul>
       <li>🍾 Built as a popup: quick invocation, and disappears when not needed, does not stay as a standalone window</li>
       <li>🫠 Provide a large and up-to-date list of emojis retrieved from openmoji.org</li>
       <li>🧠 Shows the last used emojis by default</li>
+      <li>📜 Scroll continuously through categories or select one to jump to it</li>
       <li>🔎 Search text box automatically focused and ready to type when invoked</li>
       <li>⌨️ Can use shortcuts to navigate and select emojis</li>
-      <li>✒️ Selected emoji automatically pasted to your currently focused app (on X11 only)</li>
+      <li>✒️ Optional automatic paste into the previous app on X11 and supported Wayland desktops</li>
     </ul>
     <p>
       Please note that:
     </p>
     <p>
-      ⚡️ Emote shows up faster when invoked using the built-in keyboard shortcut (`Ctrl+Alt+E` by default), than when using a manually registered keyboard shortcut.
+      On X11, Emote includes a configurable shortcut to open the picker.
     </p>
     <p>
-      🪟 Emote under Wayland cannot automatically paste the emoji into other apps, and also requires manual registering of a global keyboard shortcut - <a href="https://github.com/tom-james-watson/Emote/wiki/Hotkey-In-Wayland" target="_blank">Hotkey In Wayland</a>. This is due to intentional restrictions in the design of Wayland itself.
+      🪟 On Wayland, Emote offers global shortcut setup the first time it opens. If skipped, setup remains available in Keyboard Shortcuts. Saved shortcuts can be changed in the desktop’s shortcut settings. Automatic paste separately requires keyboard-control permission, while copy-only mode needs no permission.
     </p>
   </description>
 
@@ -47,9 +51,28 @@
   </screenshots>
 
   <releases>
-    <release type="stable" version="4.2.0" date="2026-09-18T00:00:00Z">
+    <release type="development" version="5.0.0~beta2" date="2026-10-02T00:00:00Z">
       <description>
-        <p>Settings stored in JSON, automatic paste preference, configurable picker shortcuts, resizable picker window, OpenMoji 17.0.0 emoji data, and GTK theme padding fixes for the emoji grid</p>
+        <ul>
+          <li>Fix the picker closing when dragging the window</li>
+          <li>Prevent repeated window growth when rebuilding emoji rows</li>
+          <li>Restore keyboard focus and automatic paste when using the X11 shortcut</li>
+        </ul>
+      </description>
+    </release>
+    <release type="development" version="5.0.0~beta1" date="2026-09-29T00:00:00Z">
+      <description>
+        <ul>
+          <li>Port Emote to GTK4 and libadwaita with a continuous emoji picker</li>
+          <li>Add native Wayland global shortcut setup and optional automatic paste</li>
+          <li>Add consistent category icons and emoji through Unicode 17</li>
+          <li>Improve picker interactions, appearance, and configuration</li>
+        </ul>
+      </description>
+    </release>
+    <release type="stable" version="4.1.0" date="2023-10-22T00:00:00Z">
+      <description>
+        <p>Fix font configuration in the Snap package</p>
       </description>
     </release>
     <release type="stable" version="4.0.2" date="2023-07-20T00:00:00Z">
@@ -81,8 +104,6 @@
     <control>pointing</control>
     <control>keyboard</control>
     <control>touch</control>
-    <display_length compare="ge">small</display_length>
-    <display_length compare="le">xlarge</display_length>
   </supports>
   <!-- https://hughsie.github.io/oars/generate.html -->
   <content_rating type="oars-1.1" />

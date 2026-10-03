@@ -1,692 +1,1026 @@
-import os
-import time
-from datetime import datetime
+"""A continuous emoji catalogue for GTK 4."""
+
+import subprocess
+
 import gi
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Gio, Pango
-from gi.repository.GdkPixbuf import Pixbuf
-from emote import (
-    emojis,
-    user_data,
-    preferences,
-    keyboard_shortcuts,
-    guide,
-    config,
-    debouncer,
-)
-from emote.settings import DEFAULT_SHORTCUTS
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
-GRID_SIZE = 10
-MIN_W = 400
-MIN_H = 300
-SKINTONES = ["✋", "✋🏻", "✋🏼", "✋🏽", "✋🏾", "✋🏿"]
+try:
+    gi.require_version("GdkWayland", "4.0")
+    from gi.repository import GdkWayland
+except (ImportError, ValueError):
+    GdkWayland = None
 
+from emote import config, css, debouncer, emojis, user_data
+from emote.picker_dialogs import PickerDialogs
 
-def accel_matches(accel, event):
-    keyval, mods = accel
-    event_keyval = Gdk.keyval_to_lower(event.keyval)
-    if event_keyval == Gdk.KEY_ISO_Left_Tab:
-        event_keyval = Gdk.KEY_Tab
-    event_mods = event.state & Gtk.accelerator_get_default_mod_mask()
-
-    return event_keyval == keyval and event_mods == mods
+CATEGORY_ICONS = {
+    "recent": "emote-category-recent-symbolic",
+    "smileys-people": "emote-category-smileys-people-symbolic",
+    "animals-nature": "emote-category-animals-nature-symbolic",
+    "food-drink": "emote-category-food-drink-symbolic",
+    "activities": "emote-category-activities-symbolic",
+    "travel-places": "emote-category-travel-places-symbolic",
+    "objects": "emote-category-objects-symbolic",
+    "symbols": "emote-category-symbols-symbolic",
+    "flags": "emote-category-flags-symbolic",
+}
 
 
-class EmojiPicker(Gtk.Window):
-    def __init__(self, open_time, app, show_welcome):
-        Gtk.Window.__init__(
-            self,
-            title="Emote",
-            window_position=Gtk.WindowPosition.CENTER,
-            resizable=True,
-            deletable=False,
-            name="emote_window",
-            # Tiling window managers float dialogs; a resizable plain toplevel would be tiled
-            type_hint=Gdk.WindowTypeHint.DIALOG,
-        )
-        self.set_default_size(app.settings.window_width, app.settings.window_height)
-        self.set_size_request(MIN_W, MIN_H)
-        self.set_keep_above(True)
-        self.app = app
-        self.settings = app.settings
-        self.shortcut_accels = self.parse_shortcuts()
-        self.user_chosen_size = (
-            self.settings.window_width,
-            self.settings.window_height,
-        )
-        self.dialog_open = False
-        self.search_scrolled = None
-        self.emoji_append_list = []
-        self.current_emojis = []
-        self.first_emoji_widget = None
-        self.target_emoji = None
-        self.search_debouncer = debouncer.SearchDebouncer(self.search_callback)
+def normalize_key(keyval, modifiers):
+    keyval = Gdk.keyval_to_lower(keyval)
+    if keyval == Gdk.KEY_ISO_Left_Tab:
+        keyval = Gdk.KEY_Tab
+    return keyval, modifiers & Gtk.accelerator_get_default_mod_mask()
 
-        self.maximized_or_fullscreen = False
-        self.connect("window-state-event", self.track_maximized_or_fullscreen)
-        self.connect("size-allocate", self.remember_user_chosen_size)
-        self.connect("destroy", self.save_user_chosen_size)
 
-        self.app_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.add(self.app_container)
+def parse_shortcuts(shortcuts):
+    parsed = {}
+    for action, accelerator in shortcuts.items():
+        valid, keyval, modifiers = Gtk.accelerator_parse(accelerator)
+        if not valid or not keyval:
+            default = user_data.DEFAULT_SHORTCUTS[action]
+            print(f"Ignoring {action} shortcut {accelerator!r}, using {default!r}")
+            _, keyval, modifiers = Gtk.accelerator_parse(default)
+        parsed[action] = normalize_key(keyval, modifiers)
+    return parsed
 
-        self.init_header()
-        self.init_category_selectors()
-        self.init_action_bar()
-        self.render_selected_emoji_category()
 
-        self.show_all()
-        self.present_with_time(open_time)
+class PickerRow(GObject.Object):
+    def __init__(self, category, title, entries=(), start_index=0):
+        super().__init__()
+        self.category = category
+        self.title = title
+        self.entries = entries
+        self.start_index = start_index
 
-        self.check_welcome(show_welcome)
 
-        # Delay registering events by 100ms. For some reason FOCUS of Window is
-        # momentarily False during window creation.
-        GLib.timeout_add(500, self.register_window_state_event_handler)
+class WidthAwareScrolledWindow(Gtk.ScrolledWindow):
+    def __init__(self, width_changed):
+        super().__init__()
+        self.width_changed = width_changed
+        self.last_width = 0
+        self.pending_width_update = None
 
-        self.connect("key-press-event", self.on_key_press_event)
+    def do_size_allocate(self, width, height, baseline):
+        Gtk.ScrolledWindow.do_size_allocate(self, width, height, baseline)
+        if width > 0 and width != self.last_width:
+            self.last_width = width
+            if self.pending_width_update is not None:
+                GLib.source_remove(self.pending_width_update)
+            # Rebuilding the list for every intermediate width while the user
+            # drags the window can repeatedly replace its model during layout.
+            # Wait until the resize settles and rebuild once at the final width.
+            self.pending_width_update = GLib.timeout_add(100, self.notify_width_changed)
 
-    def parse_shortcuts(self):
-        shortcut_accels = {}
-        for action, default in DEFAULT_SHORTCUTS.items():
-            accel_string = self.settings.shortcuts[action]
-            keyval, mods = Gtk.accelerator_parse(accel_string)
-            if keyval == 0:
-                print(
-                    f"Warning: could not parse shortcut {action}={accel_string!r}; "
-                    f"using {default!r}"
-                )
-                keyval, mods = Gtk.accelerator_parse(default)
-            shortcut_accels[action] = (keyval, mods)
-        return shortcut_accels
+    def notify_width_changed(self):
+        self.pending_width_update = None
+        self.width_changed(self.last_width)
+        return GLib.SOURCE_REMOVE
 
-    def track_maximized_or_fullscreen(self, widget, event):
-        self.maximized_or_fullscreen = bool(
-            event.new_window_state
-            & (Gdk.WindowState.MAXIMIZED | Gdk.WindowState.FULLSCREEN)
-        )
 
-    def remember_user_chosen_size(self, widget, allocation):
-        if not self.maximized_or_fullscreen:
-            self.user_chosen_size = tuple(self.get_size())
+class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
+    def __init__(self, application, update_accelerator):
+        super().__init__(application=application, title="Emote")
+        self.update_accelerator = update_accelerator
+        self.set_default_size(*user_data.load_picker_size())
+        self.set_size_request(-1, 300)
+        self.set_resizable(False)
+        self.set_decorated(False)
+        self.set_hide_on_close(False)
 
-    def save_user_chosen_size(self, widget):
-        if self.user_chosen_size != (
-            self.settings.window_width,
-            self.settings.window_height,
-        ):
-            self.app.update_window_size(*self.user_chosen_size)
+        self.appended = []
+        self.display_emojis = []
+        self.emoji_rows = {}
+        self.category_rows = {}
+        self.visible_rows = {}
+        self.visible_buttons = {}
+        self.selected_index = 0
+        self.skintone_index = user_data.load_skintone_index()
+        self.emoji_size = user_data.load_emoji_size()
+        self.shortcuts = parse_shortcuts(user_data.load_shortcuts())
+        self.emojis_per_row = 1
+        self.active_category = "recent"
+        self.category_jump = None
+        self.pending_category_restore = None
+        self.pending_scroll_update = None
+        self.search_scroll_position = None
+        self.search_scroll_category = None
+        self.search_selected_index = None
+        self.pending_search_scroll_restore = None
+        self.search_scroll_restore_handler = None
+        self.search_scroll_restore_target = None
+        self.searching = False
+        self.was_active = False
+        self.pointer_in_picker = False
+        self.pending_inactive_close = None
+        self.active_dialog = None
+        self.waiting_for_wayland_setup = False
+        self.portal_parent_handle = None
+        self.portal_parent_callbacks = []
+        self.portal_parent_toplevel = None
+        self.recent_dirty = False
+        self.search_debouncer = debouncer.SearchDebouncer(self.apply_search)
 
-    def init_header(self):
-        header = Gtk.HeaderBar(name="header")
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.add_css_class("picker")
+        root.add_css_class(f"emoji-size-{self.emoji_size}")
+        self.root = root
+        self.set_content(root)
+        toolbar = Adw.ToolbarView()
+        toolbar.set_top_bar_style(Adw.ToolbarStyle.RAISED)
+        toolbar.set_bottom_bar_style(Adw.ToolbarStyle.RAISED)
+        root.append(toolbar)
 
+        self.build_header()
+        toolbar.add_top_bar(self.header)
+        self.build_navigation()
+        toolbar.add_top_bar(self.navigation)
+        self.build_list()
+        toolbar.set_content(self.scroller)
+        self.build_footer()
+        toolbar.add_bottom_bar(self.footer)
+
+        keys = Gtk.EventControllerKey.new()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self.on_key_pressed)
+        self.add_controller(keys)
+        pointer = Gtk.EventControllerMotion.new()
+        pointer.connect("enter", self.on_pointer_enter)
+        pointer.connect("leave", self.on_pointer_leave)
+        self.add_controller(pointer)
+        self.connect("realize", self.on_realize)
+        self.connect("notify::is-active", self.on_active_changed)
+        self.connect("close-request", self.on_close_request)
+
+        GLib.idle_add(self.focus_search_entry)
+
+    def focus_search_entry(self):
+        self.search_entry.grab_focus()
+        return GLib.SOURCE_REMOVE
+
+    def build_header(self):
+        self.header = Gtk.WindowHandle()
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        bar.add_css_class("picker-header")
         self.search_entry = Gtk.SearchEntry()
+        self.search_entry.set_placeholder_text("Search emoji")
         self.search_entry.set_hexpand(True)
-        self.search_entry.connect("focus-in-event", self.on_search_focused)
-        self.search_entry.connect("changed", self.on_search_changed)
-        self.search_entry.connect(
-            "key-press-event", self.on_search_entry_key_press_event
+        self.search_entry.connect("search-changed", self.on_search_changed)
+        bar.append(self.search_entry)
+
+        menu = Gio.Menu()
+        standard_section = Gio.Menu()
+        standard_section.append("Preferences", "win.preferences")
+        standard_section.append("Keyboard Shortcuts", "win.shortcuts")
+        standard_section.append("About Emote", "win.about")
+        menu.append_section(None, standard_section)
+        self.menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic")
+        self.menu_button.set_tooltip_text("Menu")
+        self.menu_button.set_menu_model(menu)
+        self.menu_button.connect("notify::active", self.on_menu_active_changed)
+        bar.append(self.menu_button)
+        self.header.set_child(bar)
+
+        for name, callback in (
+            ("preferences", self.open_preferences),
+            ("shortcuts", self.open_shortcuts),
+            ("about", self.open_about),
+        ):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", lambda _action, _param, fn=callback: fn())
+            self.add_action(action)
+
+    def build_navigation(self):
+        self.navigation = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, homogeneous=True, spacing=2
         )
-        header.set_custom_title(self.search_entry)
+        self.navigation.add_css_class("category-navigation")
+        self.nav_items = {}
+        self.nav_icons = {}
+        first_button = None
 
-        GLib.idle_add(self.search_entry.grab_focus)
-
-        header.pack_end(self.init_menu_button())
-        header.pack_end(self.init_skintone_button())
-
-        self.set_titlebar(header)
-
-    def init_menu_button(self):
-        self.menu_popover = Gtk.Popover()
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        items_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-
-        prefs_btn = Gtk.ModelButton("Preferences")
-        prefs_btn.set_alignment(0, 0.5)
-        prefs_btn.connect("clicked", lambda prefs_btn: self.open_preferences())
-        items_box.pack_start(prefs_btn, False, True, 0)
-
-        keyboard_shortcuts_btn = Gtk.ModelButton("Keyboard Shortcuts")
-        keyboard_shortcuts_btn.set_alignment(0, 0.5)
-        keyboard_shortcuts_btn.connect(
-            "clicked", lambda keyboard_shortcuts_btn: self.open_keyboard_shortcuts()
-        )
-        items_box.pack_start(keyboard_shortcuts_btn, False, True, 0)
-
-        guide_btn = Gtk.ModelButton("Guide")
-        guide_btn.set_alignment(0, 0.5)
-        guide_btn.connect("clicked", lambda guide_btn: self.open_guide())
-        items_box.pack_start(guide_btn, False, True, 0)
-
-        about_btn = Gtk.ModelButton("About")
-        about_btn.set_alignment(0, 0.5)
-        about_btn.connect("clicked", lambda about_btn: self.open_about())
-        items_box.pack_start(about_btn, False, True, 0)
-
-        vbox.pack_start(items_box, False, False, GRID_SIZE)
-        hbox.pack_start(vbox, False, False, GRID_SIZE)
-        hbox.show_all()
-        self.menu_popover.add(hbox)
-        self.menu_popover.set_position(Gtk.PositionType.BOTTOM)
-
-        menu_button = Gtk.MenuButton(name="menu_button")
-        menu_button.set_popover(self.menu_popover)
-        menu_button.show()
-        menu_button.add(
-            Gtk.Image.new_from_gicon(
-                Gio.ThemedIcon(name="open-menu-symbolic"), Gtk.IconSize.BUTTON
-            )
-        )
-
-        return menu_button
-
-    def init_skintone_button(self):
-        skintone_combo = Gtk.ComboBoxText()
-        skintone_combo.set_entry_text_column(0)
-        skintone_combo.connect("changed", self.on_skintone_combo_changed)
-
-        for skintone in SKINTONES:
-            skintone_combo.append_text(skintone)
-
-        skintone_combo.set_active(self.settings.skintone_index)
-
-        return skintone_combo
-
-    def on_skintone_combo_changed(self, combo):
-        char = combo.get_active_text()
-
-        skintone_index = None
-
-        if char == "✋":
-            skintone_index = 0
-        elif char == "✋🏻":
-            skintone_index = 1
-        elif char == "✋🏼":
-            skintone_index = 2
-        elif char == "✋🏽":
-            skintone_index = 3
-        elif char == "✋🏾":
-            skintone_index = 4
-        elif char == "✋🏿":
-            skintone_index = 5
-
-        if skintone_index is not None:
-            self.app.update_skintone_index(skintone_index)
-
-            query = self.search_entry.props.text
-
-            if query == "":
-                if hasattr(self, "selected_emoji_category"):
-                    self.render_selected_emoji_category()
+        for category, label, _icon in emojis.get_category_order():
+            button = Gtk.ToggleButton()
+            if first_button is None:
+                first_button = button
             else:
-                self.render_emoji_search_results(query)
+                button.set_group(first_button)
+            image = Gtk.Image.new_from_icon_name(CATEGORY_ICONS[category])
+            image.set_pixel_size(20)
+            image.add_css_class("dim-label")
+            button.set_child(image)
+            button.set_tooltip_text(label)
+            button.set_has_frame(False)
+            button.set_halign(Gtk.Align.CENTER)
+            button.set_size_request(36, 36)
+            button.add_css_class("circular")
+            button.connect("clicked", self.on_category_clicked, category)
+            self.navigation.append(button)
+            self.nav_items[category] = button
+            self.nav_icons[category] = image
+        self.set_active_category("recent")
 
-    def init_category_selectors(self):
-        self.categories_box = Gtk.Box(margin_bottom=GRID_SIZE, margin_top=GRID_SIZE)
+    def build_list(self):
+        self.rows = Gio.ListStore.new(PickerRow)
+        factory = Gtk.SignalListItemFactory()
+        factory.connect("setup", self.setup_row)
+        factory.connect("bind", self.bind_row)
+        factory.connect("unbind", self.unbind_row)
+        self.list_view = Gtk.ListView.new(Gtk.NoSelection.new(self.rows), factory)
+        self.list_view.add_css_class("emoji-list")
+        self.list_view.set_single_click_activate(False)
+        self.scroller = WidthAwareScrolledWindow(self.on_grid_width_changed)
+        self.scroller.set_vexpand(True)
+        # Rebuilt rows must not raise the window's minimum width.
+        self.scroller.set_min_content_width(460)
+        self.scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.scroller.set_child(self.list_view)
+        self.scroller.get_vadjustment().connect("value-changed", self.on_scroll_changed)
 
-        self.category_selectors = []
-        self.selected_emoji_category = "recent"
+    def build_footer(self):
+        self.footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.footer.add_css_class("preview-footer")
+        self.preview_emoji = Gtk.Label()
+        self.preview_emoji.add_css_class("preview-emoji")
+        self.preview_emoji.set_valign(Gtk.Align.CENTER)
+        self.footer.append(self.preview_emoji)
 
-        for category, _, category_image in emojis.get_category_order():
-            category_selector = Gtk.ToggleButton(
-                label=category_image, name="category_selector_button"
+        labels = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        labels.set_hexpand(True)
+        labels.set_valign(Gtk.Align.CENTER)
+        self.preview_name = Gtk.Label(xalign=0)
+        self.preview_name.add_css_class("preview-name")
+        self.preview_name.add_css_class("heading")
+        self.preview_name.set_ellipsize(Pango.EllipsizeMode.END)
+        labels.append(self.preview_name)
+        self.footer.append(labels)
+
+        self.selection_label = Gtk.Label()
+        self.selection_label.add_css_class("selection-count")
+        self.selection_label.add_css_class("dim-label")
+        self.selection_label.set_ellipsize(Pango.EllipsizeMode.START)
+        self.selection_label.set_max_width_chars(12)
+        self.selection_label.set_visible(False)
+        self.selection_label.set_valign(Gtk.Align.CENTER)
+        self.footer.append(self.selection_label)
+
+    @staticmethod
+    def columns_for_width(width, size):
+        # Keep roughly 20 px around each emoji, then share any spare
+        # width evenly across the row.
+        return max(1, (width - 8) // (size + 20))
+
+    def on_grid_width_changed(self, width):
+        columns = self.columns_for_width(width, self.emoji_size)
+        if columns != self.emojis_per_row or self.rows.get_n_items() == 0:
+            self.emojis_per_row = columns
+            self.refresh_rows()
+
+    def set_emoji_size(self, size):
+        size = user_data.normalize_emoji_size(size)
+        if size == self.emoji_size:
+            return
+        self.root.remove_css_class(f"emoji-size-{self.emoji_size}")
+        self.emoji_size = size
+        self.emojis_per_row = self.columns_for_width(self.scroller.get_width(), size)
+        self.root.add_css_class(f"emoji-size-{size}")
+        user_data.update_emoji_size(size)
+        self.refresh_rows()
+
+    def refresh_rows(self):
+        if self.pending_category_restore is not None:
+            GLib.source_remove(self.pending_category_restore)
+            self.pending_category_restore = None
+        query = self.search_entry.get_text().strip()
+        if query:
+            self.apply_search(query)
+        else:
+            category = self.active_category
+            self.show_catalogue()
+            if category != "recent":
+                self.pending_category_restore = GLib.timeout_add(
+                    100, self.restore_category_after_resize, category
+                )
+
+    def prepare_for_open(self):
+        self.was_active = False
+        self.cancel_search_scroll_restore()
+        self.search_scroll_position = None
+        self.search_scroll_category = None
+        self.search_selected_index = None
+        self.appended.clear()
+        self.selection_label.set_text("")
+        self.selection_label.set_visible(False)
+        self.search_debouncer.cancel()
+        columns = self.columns_for_width(self.scroller.last_width, self.emoji_size)
+        width_changed = self.scroller.last_width > 0 and columns != self.emojis_per_row
+        if width_changed:
+            self.emojis_per_row = columns
+        if self.search_entry.get_text() or self.searching or width_changed:
+            self.search_entry.set_text("")
+            self.search_debouncer.cancel()
+            self.show_catalogue()
+        elif self.recent_dirty:
+            self.refresh_recent_rows()
+        self.selected_index = 0
+        self.update_visible_selection()
+        self.update_preview()
+        self.scroller.get_vadjustment().set_value(0)
+        self.set_active_category("recent")
+        GLib.idle_add(self.focus_search_entry)
+
+    def prepare_for_close(self):
+        self.was_active = False
+        self.pointer_in_picker = False
+        self.waiting_for_wayland_setup = False
+        self.root.set_sensitive(True)
+        self.search_debouncer.cancel()
+        self.cancel_search_scroll_restore()
+        self.category_jump = None
+        if self.scroller.pending_width_update is not None:
+            GLib.source_remove(self.scroller.pending_width_update)
+            self.scroller.pending_width_update = None
+        if self.pending_category_restore is not None:
+            GLib.source_remove(self.pending_category_restore)
+            self.pending_category_restore = None
+        if self.pending_scroll_update is not None:
+            GLib.source_remove(self.pending_scroll_update)
+            self.pending_scroll_update = None
+        if self.pending_inactive_close is not None:
+            GLib.source_remove(self.pending_inactive_close)
+            self.pending_inactive_close = None
+        dialog = self.get_visible_dialog()
+        if dialog:
+            dialog.close()
+
+    def get_portal_parent(self, callback):
+        """Return an exported xdg-foreign handle suitable for portal dialogs."""
+        if self.portal_parent_handle is not None:
+            callback(self.portal_parent_handle)
+            return
+        self.portal_parent_callbacks.append(callback)
+        if self.portal_parent_toplevel is not None:
+            return
+        surface = self.get_surface()
+        if GdkWayland is None or not isinstance(surface, GdkWayland.WaylandToplevel):
+            self._portal_parent_exported(None)
+            return
+        self.portal_parent_toplevel = surface
+        if not surface.export_handle(self._portal_parent_exported):
+            self.portal_parent_toplevel = None
+            self._portal_parent_exported(None)
+
+    def _portal_parent_exported(self, *args):
+        handle = next((value for value in args if isinstance(value, str)), None)
+        self.portal_parent_handle = f"wayland:{handle}" if handle else ""
+        callbacks, self.portal_parent_callbacks = self.portal_parent_callbacks, []
+        for callback in callbacks:
+            callback(self.portal_parent_handle)
+
+    def release_portal_parent(self):
+        if self.portal_parent_toplevel is not None:
+            self.portal_parent_toplevel.unexport_handle()
+            self.portal_parent_toplevel = None
+        self.portal_parent_handle = None
+
+    def refresh_recent_rows(self):
+        emojis.update_recent_category()
+        entries = emojis.get_emojis_by_category()["recent"][: self.emojis_per_row * 2]
+        old_row_count = self.category_rows["smileys-people"] - 1
+        old_entry_count = sum(
+            len(self.rows.get_item(i).entries) for i in range(1, old_row_count + 1)
+        )
+        recent_rows = [
+            PickerRow(
+                "recent", None, entries[offset : offset + self.emojis_per_row], offset
             )
-            category_selector.set_tooltip_text(self.get_category_display_name(category))
-            category_selector.category = category
+            for offset in range(0, len(entries), self.emojis_per_row)
+        ]
+        self.rows.splice(1, old_row_count, recent_rows)
+        index_shift = len(entries) - old_entry_count
+        for row_number in range(1 + len(recent_rows), self.rows.get_n_items()):
+            row = self.rows.get_item(row_number)
+            if row.title is None:
+                row.start_index += index_shift
+        self.display_emojis[:old_entry_count] = entries
 
-            if category == self.selected_emoji_category:
-                category_selector.set_active(True)
+        self.category_rows = {}
+        self.emoji_rows = {}
+        for row_number in range(self.rows.get_n_items()):
+            row = self.rows.get_item(row_number)
+            if row.title is not None:
+                self.category_rows[row.category] = row_number
+            else:
+                for index in range(row.start_index, row.start_index + len(row.entries)):
+                    self.emoji_rows[index] = row_number
 
-            self.category_selectors.append(category_selector)
+        self.visible_buttons.clear()
+        for box, row in tuple(self.visible_rows.items()):
+            if row.title is not None:
+                continue
+            for offset, button in enumerate(box.emoji_buttons[: len(row.entries)]):
+                index = row.start_index + offset
+                button.emoji_index = index
+                self.visible_buttons[index] = button
+        self.recent_dirty = False
 
-            category_selector.connect("toggled", self.on_category_selector_toggled)
+    def restore_category_after_resize(self, category):
+        self.pending_category_restore = None
+        if self.get_visible():
+            self.on_category_clicked(None, category)
+        return GLib.SOURCE_REMOVE
 
-            self.categories_box.pack_start(category_selector, True, False, GRID_SIZE)
+    def show_catalogue(self, reset_scroll=True):
+        emojis.update_recent_category()
+        self.recent_dirty = False
+        rows = []
+        self.display_emojis = []
+        self.emoji_rows = {}
+        self.category_rows = {}
+        categories = emojis.get_emojis_by_category()
+        for category, title, _icon in emojis.get_category_order():
+            entries = categories.get(category, [])
+            if category == "recent":
+                entries = entries[: self.emojis_per_row * 2]
+            self.category_rows[category] = len(rows)
+            rows.append(PickerRow(category, title))
+            for offset in range(0, len(entries), self.emojis_per_row):
+                start = len(self.display_emojis)
+                chunk = entries[offset : offset + self.emojis_per_row]
+                rows.append(PickerRow(category, None, chunk, start))
+                for index in range(start, start + len(chunk)):
+                    self.emoji_rows[index] = len(rows) - 1
+                self.display_emojis.extend(chunk)
+        self.replace_rows(rows, reset_scroll=reset_scroll)
+        self.searching = False
+        self.set_active_category("recent")
 
-        self.app_container.add(self.categories_box)
+    def apply_search(self, query):
+        query = query.strip()
+        if not query:
+            if not self.searching:
+                return
+            position = self.search_scroll_position
+            category = self.search_scroll_category
+            selected_index = self.search_selected_index
+            self.show_catalogue(reset_scroll=False)
+            self.search_scroll_position = None
+            self.search_scroll_category = None
+            self.search_selected_index = None
+            if selected_index is not None and self.display_emojis:
+                self.selected_index = min(selected_index, len(self.display_emojis) - 1)
+                self.update_visible_selection()
+                self.update_preview()
+            if position is not None:
+                self.schedule_search_scroll_restore(position, category)
+            return
+        if not self.searching:
+            self.search_scroll_position = self.scroller.get_vadjustment().get_value()
+            self.search_scroll_category = self.active_category
+            self.search_selected_index = self.selected_index
+            self.nav_items[self.active_category].set_active(False)
+            self.nav_icons[self.active_category].add_css_class("dim-label")
+        self.searching = True
+        self.display_emojis = emojis.search(query)
+        self.emoji_rows = {}
+        rows = [PickerRow("search", f"Results for “{query}”")]
+        for offset in range(0, len(self.display_emojis), self.emojis_per_row):
+            chunk = self.display_emojis[offset : offset + self.emojis_per_row]
+            rows.append(PickerRow("search", None, chunk, offset))
+            for index in range(offset, offset + len(chunk)):
+                self.emoji_rows[index] = len(rows) - 1
+        if not self.display_emojis:
+            rows.append(PickerRow("search", "No matching emoji"))
+        self.replace_rows(rows)
 
-    def init_action_bar(self):
-        self.action_bar = Gtk.ActionBar()
+    def replace_rows(self, rows, reset_scroll=True):
+        self.cancel_search_scroll_restore()
+        if self.pending_category_restore is not None:
+            GLib.source_remove(self.pending_category_restore)
+            self.pending_category_restore = None
+        if self.pending_scroll_update is not None:
+            GLib.source_remove(self.pending_scroll_update)
+            self.pending_scroll_update = None
+        self.category_jump = None
+        for box in tuple(self.visible_rows):
+            for button in box.emoji_buttons:
+                button.remove_css_class("keyboard-selected")
+        self.selected_index = 0
+        self.visible_rows.clear()
+        self.visible_buttons.clear()
+        self.rows.splice(0, self.rows.get_n_items(), rows)
+        self.update_preview()
+        if reset_scroll:
+            self.list_view.scroll_to(0, Gtk.ListScrollFlags.NONE, None)
+            self.scroller.get_vadjustment().set_value(0)
 
-        self.emoji_preview_box = Gtk.Box(
-            spacing=GRID_SIZE, margin=GRID_SIZE, orientation=Gtk.Orientation.HORIZONTAL
+    def cancel_search_scroll_restore(self):
+        if self.pending_search_scroll_restore is not None:
+            GLib.source_remove(self.pending_search_scroll_restore)
+            self.pending_search_scroll_restore = None
+        if self.search_scroll_restore_handler is not None:
+            self.scroller.get_vadjustment().disconnect(
+                self.search_scroll_restore_handler
+            )
+            self.search_scroll_restore_handler = None
+        self.search_scroll_restore_target = None
+
+    def schedule_search_scroll_restore(self, position, category):
+        self.search_scroll_restore_target = (position, category)
+        adjustment = self.scroller.get_vadjustment()
+        self.search_scroll_restore_handler = adjustment.connect(
+            "changed", self.try_restore_search_scroll
         )
-
-        self.previewed_emoji_label = Gtk.Label(" ")
-        self.previewed_emoji_label.set_name("previewed_emoji_label")
-        self.previewed_emoji_label.set_alignment(0, 0.2)
-        self.emoji_preview_box.pack_start(self.previewed_emoji_label, False, False, 0)
-
-        self.emoji_preview_box_text = Gtk.Box(
-            spacing=0, orientation=Gtk.Orientation.VERTICAL
+        self.pending_search_scroll_restore = GLib.timeout_add(
+            400, self.finish_search_scroll_restore
         )
-        self.previewed_emoji_name_label = Gtk.Label(
-            " ", ellipsize=Pango.EllipsizeMode.END
-        )
-        self.previewed_emoji_name_label.set_name("previewed_emoji_name_label")
-        self.previewed_emoji_name_label.set_alignment(0, 0.2)
-        self.emoji_preview_box_text.pack_start(
-            self.previewed_emoji_name_label, False, False, 0
-        )
+        self.try_restore_search_scroll(adjustment)
 
-        self.previewed_emoji_shortcode_label = Gtk.Label(
-            " ", ellipsize=Pango.EllipsizeMode.END
-        )
-        self.previewed_emoji_shortcode_label.set_name("previewed_emoji_shortcode_label")
-        self.previewed_emoji_shortcode_label.set_alignment(0, 0.2)
-        self.emoji_preview_box_text.pack_start(
-            self.previewed_emoji_shortcode_label, False, False, 0
-        )
+    def try_restore_search_scroll(self, adjustment, force=False):
+        if self.search_scroll_restore_target is None:
+            return
+        position, category = self.search_scroll_restore_target
+        maximum = max(0, adjustment.get_upper() - adjustment.get_page_size())
+        if maximum < position and not force:
+            return
+        self.cancel_search_scroll_restore()
+        adjustment.set_value(min(position, maximum))
+        self.set_active_category(category)
 
-        self.emoji_preview_box.pack_start(self.emoji_preview_box_text, False, False, 0)
+    def finish_search_scroll_restore(self):
+        self.pending_search_scroll_restore = None
+        self.try_restore_search_scroll(self.scroller.get_vadjustment(), force=True)
+        return GLib.SOURCE_REMOVE
 
-        self.action_bar.pack_start(self.emoji_preview_box)
+    def setup_row(self, _factory, list_item):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        box.title_label = Gtk.Label(xalign=0)
+        box.title_label.add_css_class("category-title")
+        box.title_label.add_css_class("dim-label")
+        box.title_label.set_visible(False)
+        box.append(box.title_label)
+        box.emoji_buttons = []
+        box.bound_row = None
+        box.hovered_index = None
 
-        self.selected_box = Gtk.Box(
-            spacing=GRID_SIZE, margin=GRID_SIZE, margin_bottom=0, expand=False
-        )
+        motion = Gtk.EventControllerMotion.new()
+        motion.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        motion.connect("enter", self.on_row_motion, box)
+        motion.connect("motion", self.on_row_motion, box)
+        motion.connect("leave", self.on_row_leave, box)
+        box.add_controller(motion)
 
-        self.emoji_append_list_preview = Gtk.Label(
-            " ", max_width_chars=25, ellipsize=Pango.EllipsizeMode.START
-        )
-        self.emoji_append_list_preview.set_name("emoji_append_list_preview")
-        self.selected_box.pack_start(self.emoji_append_list_preview, False, False, 0)
+        right_click = Gtk.GestureClick.new()
+        right_click.set_button(3)
+        right_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        right_click.connect("pressed", self.on_row_right_pressed, box)
+        box.add_controller(right_click)
+        list_item.set_child(box)
+        list_item.set_selectable(False)
+        list_item.set_activatable(False)
 
-        self.action_bar.pack_end(self.selected_box)
+    def bind_row(self, _factory, list_item):
+        row = list_item.get_item()
+        box = list_item.get_child()
+        box.bound_row = row
+        box.hovered_index = None
+        self.visible_rows[box] = row
+        box.set_homogeneous(row.title is None)
+        box.remove_css_class("category-row")
+        box.remove_css_class("emoji-row")
 
-        self.action_bar.show_all()
-        self.selected_box.hide()
-
-        self.app_container.pack_end(self.action_bar, False, False, 0)
-
-    def get_skintone_char(self, emoji):
-        char = emoji["char"]
-
-        if emoji["skintone"] is None:
-            return char
-
-        skintone = self.settings.skintone_index
-
-        if skintone == 0:
-            return char
-
-        try:
-            return emoji["skintone"][str(skintone)]["char"]
-        except Exception:
-            return char
-
-    def show_emoji_preview(self, char):
-        emoji = emojis.get_emoji_by_char(char)
-
-        self.previewed_emoji_label.set_text(self.get_skintone_char(emoji))
-        self.previewed_emoji_shortcode_label.set_text(f':{emoji["shortcode"]}:')
-        self.previewed_emoji_name_label.set_text(emoji["name"])
-
-    def reset_emoji_preview(self):
-        if len(self.current_emojis) > 0:
-            self.show_emoji_preview(self.target_emoji)
-        else:
-            self.previewed_emoji_label.set_text(" ")
-            self.previewed_emoji_name_label.set_text(" ")
-            self.previewed_emoji_shortcode_label.set_text(" ")
-
-    def update_emoji_append_list_preview(self):
-        self.emoji_append_list_preview.show_all()
-        self.emoji_append_list_preview.set_text("".join(self.emoji_append_list))
-
-    def check_welcome(self, show_welcome):
-        """Show the guide the first time we run the app"""
-        if show_welcome:
-            self.open_guide()
-
-    def register_window_state_event_handler(self):
-        self.connect("window-state-event", self.on_window_state_event)
-
-    def on_window_state_event(self, widget, event):
-        """If the window has just unfocused, exit"""
-        if self.dialog_open:
+        if row.title is not None:
+            box.add_css_class("category-row")
+            box.title_label.set_text(row.title)
+            box.title_label.set_visible(True)
+            for button in box.emoji_buttons:
+                button.emoji_index = None
+                button.remove_css_class("keyboard-selected")
+                button.set_visible(False)
             return
 
-        if config.is_debug:
-            return
+        box.add_css_class("emoji-row")
+        box.title_label.set_visible(False)
+        while len(box.emoji_buttons) < self.emojis_per_row:
+            button = Gtk.Button()
+            button.set_has_frame(False)
+            button.set_hexpand(True)
+            button.add_css_class("emoji-cell")
+            button.set_focusable(False)
+            button.emoji_index = None
+            button.connect("clicked", self.on_bound_button_clicked)
+            box.append(button)
+            box.emoji_buttons.append(button)
 
-        if not (event.new_window_state & Gdk.WindowState.FOCUSED):
-            self.destroy()
+        for offset, button in enumerate(box.emoji_buttons):
+            if offset >= self.emojis_per_row:
+                button.emoji_index = None
+                button.set_visible(False)
+                continue
+            if offset >= len(row.entries):
+                button.emoji_index = None
+                button.set_label("")
+                button.set_tooltip_text(None)
+                button.set_sensitive(False)
+                button.remove_css_class("keyboard-selected")
+                button.set_visible(True)
+                continue
+            emoji = row.entries[offset]
+            index = row.start_index + offset
+            button.emoji_index = index
+            button.set_label(self.get_skintone_char(emoji))
+            button.set_tooltip_text(emoji["name"])
+            button.set_sensitive(True)
+            button.set_visible(True)
+            if index == self.selected_index:
+                button.add_css_class("keyboard-selected")
+            else:
+                button.remove_css_class("keyboard-selected")
+            self.visible_buttons[index] = button
 
-    def on_key_press_event(self, widget, event):
-        actions = {
-            "focus_search": self.search_entry.grab_focus,
-            "next_category": self.on_cycle_category,
-            "previous_category": lambda: self.on_cycle_category(True),
-            "close": self.destroy,
-        }
+    def unbind_row(self, _factory, list_item):
+        row = list_item.get_item()
+        box = list_item.get_child()
+        if self.visible_rows.get(box) is row:
+            self.visible_rows.pop(box)
+        if row and row.title is None:
+            for offset, button in enumerate(box.emoji_buttons[: len(row.entries)]):
+                index = row.start_index + offset
+                if self.visible_buttons.get(index) is button:
+                    self.visible_buttons.pop(index)
+        box.bound_row = None
+        box.hovered_index = None
+        for button in box.emoji_buttons:
+            button.emoji_index = None
+            button.remove_css_class("keyboard-selected")
 
-        for action, method in actions.items():
-            if accel_matches(self.shortcut_accels[action], event):
-                method()
-                return True
+    def on_bound_button_clicked(self, button):
+        if button.emoji_index is not None:
+            self.select_emoji(button.emoji_index)
 
-        return False
+    def row_index_at(self, box, x):
+        if box.bound_row is None or box.bound_row.title is not None:
+            return None
+        for button in box.emoji_buttons:
+            if button.emoji_index is None or not button.get_visible():
+                continue
+            result = button.compute_bounds(box)
+            if result:
+                rect = result[1] if isinstance(result, tuple) else result
+                if rect.get_x() <= x < rect.get_x() + rect.get_width():
+                    return button.emoji_index
+        return None
 
-    def open_preferences(self):
-        self.dialog_open = True
-        preferences_window = preferences.Preferences(
-            self.settings,
-            self.app.update_theme,
-            self.app.update_auto_paste,
-            self.app.update_emoji_size,
-        )
-        preferences_window.connect("destroy", self.on_close_dialog)
+    def on_row_motion(self, _controller, x, _y, box):
+        index = self.row_index_at(box, x)
+        if box.hovered_index != index:
+            box.hovered_index = index
+            self.update_preview(index)
 
-    def open_keyboard_shortcuts(self):
-        self.dialog_open = True
-        keyboard_shortcuts_window = keyboard_shortcuts.KeyboardShortcuts(
-            self.settings, self.app.update_accelerator
-        )
-        keyboard_shortcuts_window.connect("destroy", self.on_close_dialog)
+    def on_row_leave(self, _controller, box):
+        if box.hovered_index is not None:
+            box.hovered_index = None
+            self.update_preview()
 
-    def open_guide(self):
-        self.dialog_open = True
-        guide_window = guide.Guide()
-        guide_window.connect("destroy", self.on_close_dialog)
+    def on_row_right_pressed(self, _gesture, _n_press, x, _y, box):
+        index = self.row_index_at(box, x)
+        if index is not None:
+            self.append_emoji(index)
 
-    def open_about(self):
-        logo_path = f"{config.static_dir}/logo.svg"
-        logo = Pixbuf.new_from_file(logo_path)
-
-        about_dialog = Gtk.AboutDialog(
-            transient_for=self,
-            modal=True,
-            logo=logo,
-            program_name="Emote",
-            title="About Emote",
-            version=os.environ.get(
-                "FLATPAK_APP_VERSION", os.environ.get("SNAP_VERSION", "dev build")
-            ),
-            authors=["Tom Watson", "Vincent Emonet"],
-            artists=["Tom Watson, Matthew Wong"],
-            documenters=["Irene Auñón"],
-            copyright=f"© Tom Watson {datetime.now().year}",
-            website_label="Source Code",
-            website="https://github.com/tom-james-watson/emote",
-            comments="Modern popup emoji picker",
-            license_type=Gtk.License.GPL_3_0,
-        )
-
-        self.dialog_open = True
-        about_dialog.present()
-        about_dialog.connect("destroy", self.on_close_dialog)
-
-    def on_close_dialog(self, dialog):
-        self.dialog_open = False
-
-    def on_search_entry_key_press_event(self, widget, event):
-        keyval = event.keyval
-        keyval_name = Gdk.keyval_name(keyval)
-        shift = bool(event.state & Gdk.ModifierType.SHIFT_MASK)
-
-        if shift and keyval_name == "Return":
-            if len(self.current_emojis) > 0:
-                self.on_emoji_append(self.get_skintone_char(self.current_emojis[0]))
-        elif keyval_name == "Return":
-            if len(self.current_emojis) > 0:
-                self.on_emoji_select(self.get_skintone_char(self.current_emojis[0]))
-        elif keyval_name == "Down" and self.first_emoji_widget:
-            self.first_emoji_widget.grab_focus()
+    def on_category_clicked(self, _button, category):
+        self.cancel_search_scroll_restore()
+        if self.searching or self.search_entry.get_text():
+            self.search_entry.set_text("")
+            self.search_debouncer.cancel()
+            self.search_scroll_position = None
+            self.search_scroll_category = None
+            self.search_selected_index = None
+            self.show_catalogue()
+        self.category_jump = category
+        self.set_active_category(category)
+        target_index = self.category_rows[category]
+        if target_index + 1 < self.rows.get_n_items():
+            first_row = self.rows.get_item(target_index + 1)
+            if first_row.title is None and first_row.entries:
+                self.selected_index = first_row.start_index
+                self.update_visible_selection()
+                self.update_preview()
+        position = self.category_scroll_position(target_index)
+        if position is not None:
+            self.scroller.get_vadjustment().set_value(position)
         else:
-            return False
+            self.list_view.scroll_to(target_index, Gtk.ListScrollFlags.NONE, None)
+        GLib.timeout_add(100, self.finish_category_jump, category)
 
+    def category_scroll_position(self, target_index):
+        # Offscreen list rows may have no allocation. Their measured heights
+        # include list spacing; a mapped row anchors the sum to scroll space.
+        boxes = {row: box for box, row in self.visible_rows.items()}
+        heights_by_kind = {}
+        for row, box in boxes.items():
+            height = box.get_parent().measure(Gtk.Orientation.VERTICAL, -1)[1]
+            if height <= 0:
+                return None
+            kind = row.title is not None
+            if kind in heights_by_kind and heights_by_kind[kind] != height:
+                heights_by_kind[kind] = None
+            elif kind not in heights_by_kind:
+                heights_by_kind[kind] = height
+
+        adjustment = self.scroller.get_vadjustment()
+        row_top = 0
+        target_top = None
+        layout_offsets = []
+        for index in range(self.rows.get_n_items()):
+            row = self.rows.get_item(index)
+            box = boxes.get(row)
+            if index == target_index:
+                target_top = row_top
+            if box is not None and box.get_mapped():
+                result = box.compute_bounds(self.scroller)
+                if result:
+                    rect = result[1] if isinstance(result, tuple) else result
+                    layout_offsets.append(
+                        adjustment.get_value() + rect.get_y() - row_top
+                    )
+            if box is None:
+                height = heights_by_kind.get(row.title is not None)
+            else:
+                height = box.get_parent().measure(Gtk.Orientation.VERTICAL, -1)[1]
+            if height is None:
+                return None
+            row_top += height
+        if not layout_offsets or max(layout_offsets) - min(layout_offsets) > 1:
+            return None
+        return target_top + layout_offsets[0]
+
+    def finish_category_jump(self, category):
+        if self.category_jump == category:
+            self.category_jump = None
+            self.set_active_category(category)
+        return GLib.SOURCE_REMOVE
+
+    def on_scroll_changed(self, _adjustment):
+        if self.searching or self.category_jump or self.search_scroll_restore_target:
+            return
+        if self.pending_scroll_update is None:
+            self.pending_scroll_update = GLib.idle_add(self.update_category_from_scroll)
+
+    def update_category_from_scroll(self):
+        self.pending_scroll_update = None
+        if self.searching or self.category_jump or self.search_scroll_restore_target:
+            return GLib.SOURCE_REMOVE
+        closest = None
+        for box, row in tuple(self.visible_rows.items()):
+            if not box.get_mapped():
+                continue
+            result = box.compute_bounds(self.scroller)
+            if not result:
+                continue
+            rect = result[1] if isinstance(result, tuple) else result
+            y = rect.get_y()
+            if y + rect.get_height() / 2 < 0 or y > self.scroller.get_height():
+                continue
+            if closest is None or y < closest[0]:
+                closest = (y, row.category)
+        if closest and closest[1] in self.nav_items:
+            self.set_active_category(closest[1])
+        return GLib.SOURCE_REMOVE
+
+    def set_active_category(self, category):
+        if hasattr(self, "nav_items"):
+            if self.active_category != category:
+                self.nav_icons[self.active_category].add_css_class("dim-label")
+            self.nav_icons[category].remove_css_class("dim-label")
+            self.nav_items[category].set_active(True)
+        self.active_category = category
+
+    def on_search_changed(self, entry):
+        self.search_debouncer.search(entry.get_text())
+
+    def on_close_request(self, _window):
+        self.get_application().close_picker_window()
         return True
 
-    def on_category_selector_toggled(self, toggled_category_selector):
-        if not toggled_category_selector.get_active():
+    def on_pointer_enter(self, _controller, _x, _y):
+        self.pointer_in_picker = True
+
+    def on_pointer_leave(self, _controller):
+        self.pointer_in_picker = False
+        # Focus can leave before the pointer. Re-evaluate now instead of
+        # waiting for another focus notification that will never arrive.
+        self.maybe_schedule_inactive_close()
+
+    def on_realize(self, _window):
+        self.get_surface().connect("notify::state", self.on_active_changed)
+
+    def on_active_changed(self, _window, _property):
+        if self.is_active():
+            self.was_active = True
+        else:
+            self.maybe_schedule_inactive_close()
+
+    def maybe_schedule_inactive_close(self):
+        if (
+            self.was_active
+            and not self.is_active()
+            and not self.pointer_in_picker
+            and self.active_dialog is None
+            and not self.waiting_for_wayland_setup
+        ):
+            self.schedule_inactive_close()
+
+    def on_menu_active_changed(self, button, _property):
+        if not button.get_active() and self.active_dialog is None:
+            self.schedule_inactive_close()
+
+    def schedule_inactive_close(self):
+        if self.pending_inactive_close is None:
+            self.pending_inactive_close = GLib.timeout_add(75, self.close_if_inactive)
+
+    def close_if_inactive(self):
+        self.pending_inactive_close = None
+        # Compositor drags take keyboard focus without deactivating the window.
+        surface = self.get_surface()
+        surface_focused = surface is not None and bool(
+            surface.get_state() & Gdk.ToplevelState.FOCUSED
+        )
+        if (
+            self.is_active()
+            or surface_focused
+            or self.pointer_in_picker
+            or self.menu_button.get_active()
+            or self.active_dialog is not None
+            or self.waiting_for_wayland_setup
+        ):
+            return GLib.SOURCE_REMOVE
+        if self.get_visible_dialog() is None:
+            self.get_application().close_picker_window()
+        return GLib.SOURCE_REMOVE
+
+    def on_key_pressed(self, _controller, keyval, _keycode, state):
+        if self.get_visible_dialog() is not None or self.waiting_for_wayland_setup:
+            return False
+        actions = {
+            "focus_search": self.search_entry.grab_focus,
+            "next_category": lambda: self.cycle_category(1),
+            "previous_category": lambda: self.cycle_category(-1),
+            "close": self.get_application().close_picker_window,
+        }
+        key = normalize_key(keyval, state)
+        for action, shortcut in self.shortcuts.items():
+            if key == shortcut:
+                actions[action]()
+                return True
+        shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and self.display_emojis:
+            if shift:
+                self.append_emoji(self.selected_index)
+            else:
+                self.select_emoji(self.selected_index)
+            return True
+        if keyval == Gdk.KEY_Down:
+            self.move_selection_vertical(1)
+            return True
+        if keyval == Gdk.KEY_Up:
+            self.move_selection_vertical(-1)
+            return True
+        if self.get_focus() is not self.search_entry:
+            if keyval == Gdk.KEY_Right:
+                self.move_selection(1)
+                return True
+            if keyval == Gdk.KEY_Left:
+                self.move_selection(-1)
+                return True
+        return False
+
+    def cycle_category(self, delta):
+        categories = list(self.nav_items)
+        index = categories.index(self.active_category)
+        self.on_category_clicked(None, categories[(index + delta) % len(categories)])
+
+    def move_selection(self, delta):
+        if not self.display_emojis:
+            return
+        self.set_selected_index(
+            max(0, min(len(self.display_emojis) - 1, self.selected_index + delta))
+        )
+
+    def set_selected_index(self, index):
+        self.cancel_search_scroll_restore()
+        self.selected_index = index
+        self.update_visible_selection()
+        self.update_preview()
+        self.list_view.scroll_to(
+            self.emoji_rows[self.selected_index], Gtk.ListScrollFlags.NONE, None
+        )
+
+    def update_visible_selection(self):
+        for box in tuple(self.visible_rows):
+            for button in box.emoji_buttons:
+                if (
+                    button.emoji_index is not None
+                    and button.emoji_index == self.selected_index
+                ):
+                    button.add_css_class("keyboard-selected")
+                else:
+                    button.remove_css_class("keyboard-selected")
+
+    def move_selection_vertical(self, direction):
+        if not self.display_emojis:
             return
 
-        self.selected_emoji_category = toggled_category_selector.category
+        current_row_index = self.emoji_rows[self.selected_index]
+        current_row = self.rows.get_item(current_row_index)
+        column = self.selected_index - current_row.start_index
+        row_index = current_row_index + direction
 
-        for category_selector in self.category_selectors:
-            if category_selector.category != self.selected_emoji_category:
-                category_selector.set_active(False)
+        while 0 <= row_index < self.rows.get_n_items():
+            row = self.rows.get_item(row_index)
+            if row.title is None:
+                self.set_selected_index(
+                    row.start_index + min(column, len(row.entries) - 1)
+                )
+                return
+            row_index += direction
 
-        self.search_entry.set_text("")
-        self.render_selected_emoji_category()
+    def get_skintone_char(self, emoji):
+        variants = emoji["skintone"]
+        if not variants or self.skintone_index == 0:
+            return emoji["char"]
+        return variants.get(str(self.skintone_index), emoji)["char"]
 
-    def on_cycle_category(self, backwards=False):
-        index = None
+    def set_skin_tone(self, index):
+        if index < 0 or index >= len(user_data.SKINTONES):
+            return
+        if index == self.skintone_index:
+            return
+        self.skintone_index = index
+        user_data.update_skintone_index(index)
+        rows = [self.rows.get_item(i) for i in range(self.rows.get_n_items())]
+        scroll_position = self.scroller.get_vadjustment().get_value()
+        # Update current cells before replacing rows unbinds them.
+        for emoji_index, button in tuple(self.visible_buttons.items()):
+            if emoji_index < len(self.display_emojis):
+                button.set_label(
+                    self.get_skintone_char(self.display_emojis[emoji_index])
+                )
 
-        for i, category_selector in enumerate(self.category_selectors):
-            if category_selector.category == self.selected_emoji_category:
-                index = i
-                break
+        # Fresh row objects make Gtk.ListView rebind cells with the new tone.
+        refreshed_rows = [
+            PickerRow(row.category, row.title, row.entries, row.start_index)
+            for row in rows
+        ]
+        self.rows.splice(0, len(rows), refreshed_rows)
+        self.update_preview()
+        GLib.idle_add(self.restore_grid_scroll_position, scroll_position)
 
-        if backwards:
-            if index == 0:
-                index = -1
-            else:
-                index -= 1
-        else:
-            if index == len(self.category_selectors) - 1:
-                index = 0
-            else:
-                index += 1
+    def restore_grid_scroll_position(self, position):
+        self.scroller.get_vadjustment().set_value(position)
+        return GLib.SOURCE_REMOVE
 
-        toggled_category_selector = self.category_selectors[index]
-        toggled_category_selector.set_active(True)
-        toggled_category_selector.grab_focus()
+    def update_preview(self, index=None):
+        if not self.display_emojis:
+            self.preview_emoji.set_text("")
+            self.preview_name.set_text("No emoji")
+            return
+        emoji = self.display_emojis[self.selected_index if index is None else index]
+        self.preview_emoji.set_text(self.get_skintone_char(emoji))
+        self.preview_name.set_text(emoji["name"])
 
-        self.on_category_selector_toggled(toggled_category_selector)
-
-    def on_search_focused(self, search_entry, event):
-        if len(self.current_emojis) > 0:
-            self.target_emoji = self.get_skintone_char(self.current_emojis[0])
-        self.reset_emoji_preview()
-
-    def on_search_changed(self, search_entry):
-        self.search_debouncer.search(self.search_entry.props.text)
-
-    def search_callback(self, query):
-        if query == "":
-            if self.search_scrolled:
-                self.search_scrolled.destroy()
-                self.search_scrolled = None
-
-            self.categories_box.show()
-
-            self.render_selected_emoji_category()
-
-        else:
-            self.app_container.remove(self.category_scrolled)
-            self.render_emoji_search_results(query)
-
-    def render_emoji_search_results(self, query):
-        if self.search_scrolled:
-            self.search_scrolled.destroy()
-
-        self.search_scrolled = Gtk.ScrolledWindow()
-        self.search_scrolled.set_hexpand(True)
-        self.search_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-
-        search_box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=GRID_SIZE,
-            margin_top=GRID_SIZE,
-        )
-        search_box.pack_start(
-            self.create_emoji_results(emojis.search(query)), False, False, 0
-        )
-
-        self.search_scrolled.add(search_box)
-        self.app_container.pack_start(self.search_scrolled, True, True, 0)
-        self.app_container.reorder_child(self.search_scrolled, 2)
-
-        self.show_all()
-        self.categories_box.hide()
-
-    def get_category_display_name(self, category):
-        category_display_name = None
-
-        for c, display_name, _ in emojis.get_category_order():
-            if c == category:
-                category_display_name = display_name
-                break
-
-        return category_display_name
-
-    def render_selected_emoji_category(self):
-        if hasattr(self, "category_scrolled"):
-            self.app_container.remove(self.category_scrolled)
-
-        self.category_scrolled = Gtk.ScrolledWindow()
-        self.category_scrolled.set_hexpand(True)
-        self.category_scrolled.set_policy(
-            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC
-        )
-
-        category = self.selected_emoji_category
-
-        category_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-
-        label_box = Gtk.Box()
-        label = Gtk.Label(margin_right=GRID_SIZE, margin_left=GRID_SIZE)
-        label.set_name("category_label")
-        label.set_text(self.get_category_display_name(category))
-        label.set_justify(Gtk.Justification.LEFT)
-        label_box.pack_start(label, False, False, 0)
-        category_box.pack_start(Gtk.Box(), False, False, 0)
-        category_box.add(label_box)
-
-        category_box.pack_start(
-            self.create_emoji_results(emojis.get_emojis_by_category()[category], True),
-            False,
-            False,
-            0,
-        )
-
-        self.category_scrolled.add(category_box)
-        self.app_container.pack_start(self.category_scrolled, True, True, 0)
-        self.app_container.reorder_child(self.category_scrolled, 2)
-
-        self.show_all()
-
-    def create_emoji_results(self, emojis, for_category=False):
-        self.current_emojis = emojis
-        self.first_emoji_widget = None
-
-        if len(emojis) > 0:
-            self.target_emoji = self.get_skintone_char(emojis[0])
-        self.reset_emoji_preview()
-
-        results_flow_box = Gtk.FlowBox(
-            name="emoji_grid",
-            selection_mode=Gtk.SelectionMode.NONE,
-            homogeneous=True,
-            min_children_per_line=1,
-            max_children_per_line=64,
-            activate_on_single_click=False,
-            margin=GRID_SIZE,
-            margin_bottom=0,
-            margin_top=GRID_SIZE if for_category else 0,
-        )
-
-        for index, emoji in enumerate(emojis):
-            btn = Gtk.Button(
-                label=self.get_skintone_char(emoji),
-                name="emoji_button",
-                relief=Gtk.ReliefStyle.NONE,
-            )
-            btn.connect("event", self.on_emoji_btn_event)
-            results_flow_box.insert(btn, -1)
-            btn.get_parent().set_can_focus(False)
-
-            if index == 0:
-                self.first_emoji_widget = btn
-
-        return results_flow_box
-
-    def on_emoji_btn_event(self, btn, event):
-        emoji = btn.get_label()
-
-        if event.type == Gdk.EventType.BUTTON_PRESS:
-            if event.button.button == 1:
-                # Left mouse clicked
-                state = event.state
-                shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
-
-                if shift:
-                    self.on_emoji_append(btn.get_label())
-                else:
-                    self.on_emoji_select(btn.get_label())
-
-            if event.button.button == 3:
-                # Right mouse clicked
-                self.on_emoji_append(btn.get_label())
-
-        elif event.type == Gdk.EventType.KEY_PRESS:
-            keyval = event.keyval
-            keyval_name = Gdk.keyval_name(keyval)
-            shift = bool(event.state & Gdk.ModifierType.SHIFT_MASK)
-
-            if shift and keyval_name == "Return":
-                self.on_emoji_append(emoji)
-            elif keyval_name == "Return":
-                self.on_emoji_select(emoji)
-
-        elif event.type == Gdk.EventType.ENTER_NOTIFY:
-            self.show_emoji_preview(emoji)
-
-        elif event.type == Gdk.EventType.LEAVE_NOTIFY:
-            self.reset_emoji_preview()
-
-        elif event.type == Gdk.EventType.FOCUS_CHANGE:
-            self.target_emoji = emoji
-            self.show_emoji_preview(emoji)
-
-    def on_emoji_append(self, emoji):
-        """Append the selected emoji to the clipboard"""
-        print(f"Appending {emoji} to selection")
-        self.emoji_append_list.append(emoji)
-
-        if len(self.emoji_append_list) == 1:
-            self.selected_box.show_all()
-            self.previewed_emoji_name_label.set_max_width_chars(20)
-            self.previewed_emoji_shortcode_label.set_max_width_chars(20)
-
-        self.update_emoji_append_list_preview()
-
-        self.copy_to_clipboard("".join(self.emoji_append_list))
-        self.add_emoji_to_recent(emoji)
-
-    def on_emoji_select(self, emoji):
-        """
-        Copy the selected emoji to the clipboard, close the picker window and
-        make the user's system perform a paste after 150ms, pasting the emoji
-        to the currently focused application window.
-
-        If we have been appending other emojis first, add this final one first.
-        """
-        self.hide()
-
-        if len(self.emoji_append_list) > 0:
-            self.on_emoji_append(emoji)
-        else:
-            print(f"Selecting {emoji}")
-            self.add_emoji_to_recent(emoji)
-            self.copy_to_clipboard(emoji)
-
-        self.destroy()
-
-        if self.settings.auto_paste and not config.is_wayland:
-            time.sleep(0.15)
-            os.system("xdotool key ctrl+v")
-
-    def add_emoji_to_recent(self, emoji):
+    def append_emoji(self, index):
+        if self.waiting_for_wayland_setup:
+            return
+        emoji = self.get_skintone_char(self.display_emojis[index])
+        self.appended.append(emoji)
+        self.copy_to_clipboard("".join(self.appended))
         user_data.update_recent_emojis(emoji)
-        emojis.update_recent_category()
+        self.recent_dirty = True
+        self.selection_label.set_text("".join(self.appended))
+        self.selection_label.set_visible(True)
+
+    def select_emoji(self, index):
+        if self.waiting_for_wayland_setup:
+            return
+        emoji = self.get_skintone_char(self.display_emojis[index])
+        content = "".join(self.appended) + emoji
+        self.copy_to_clipboard(content)
+        user_data.update_recent_emojis(emoji)
+        self.recent_dirty = True
+        self.get_application().close_picker_window()
+        if config.is_wayland:
+            if user_data.load_wayland_auto_paste_choice() is True:
+                GLib.timeout_add(150, self.get_application().paste_wayland)
+        elif user_data.load_x11_auto_paste_enabled():
+            GLib.timeout_add(150, self.paste_x11)
 
     def copy_to_clipboard(self, content):
-        cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        cb.set_text(content, -1)
-        if config.is_wayland:
-            os.system(f'wl-copy "{content}"')
+        Gdk.Display.get_default().get_clipboard().set(content)
+
+    def paste_x11(self):
+        subprocess.Popen(["xdotool", "key", "ctrl+v"])
+        return GLib.SOURCE_REMOVE

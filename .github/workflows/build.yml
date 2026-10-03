@@ -11,16 +11,29 @@ on:
 
 jobs:
 
+  test:
+    name: Test Python behavior
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+    - run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential python3-dev python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libei1
+        /usr/bin/python3 -m venv --system-site-packages .venv
+        .venv/bin/pip install -e .
+        .venv/bin/python -m unittest discover -v
+
   flatpak:
     name: Build Flatpak
+    needs: test
     runs-on: ubuntu-latest
     container:
-      image: bilelmoussaoui/flatpak-github-actions:gnome-44
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
       options: --privileged
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
 
-    - uses: flatpak/flatpak-github-actions/flatpak-builder@v6.1
+    - uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
       with:
         bundle: emote.flatpak
         manifest-path: com.tomjwatson.Emote.yml
@@ -30,11 +43,12 @@ jobs:
 
   snap:
     name: Build Snap
+    needs: test
     runs-on: ubuntu-latest
     outputs:
       snap-file: ${{ steps.build-snap.outputs.snap }}
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
 
     - uses: snapcore/action-build@v1
       id: build-snap
@@ -44,7 +58,7 @@ jobs:
 
     # - run: emote
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v7
       with:
         name: emote-pkg
         path: ${{ steps.build-snap.outputs.snap }}

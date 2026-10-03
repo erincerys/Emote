@@ -1,112 +1,183 @@
 import gi
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib
-from emote import config
-from emote.keybinding import ButtonKeybinding
-from emote.settings import SETTINGS_PATH
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, Gtk
+
+from emote import config, user_data
+
+MODIFIER_KEYS = {
+    Gdk.KEY_Shift_L,
+    Gdk.KEY_Shift_R,
+    Gdk.KEY_Shift_Lock,
+    Gdk.KEY_Control_L,
+    Gdk.KEY_Control_R,
+    Gdk.KEY_Alt_L,
+    Gdk.KEY_Alt_R,
+    Gdk.KEY_Meta_L,
+    Gdk.KEY_Meta_R,
+    Gdk.KEY_Super_L,
+    Gdk.KEY_Super_R,
+    Gdk.KEY_Hyper_L,
+    Gdk.KEY_Hyper_R,
+    Gdk.KEY_ISO_Level3_Shift,
+    Gdk.KEY_ISO_Level3_Latch,
+    Gdk.KEY_ISO_Level3_Lock,
+}
 
 
-GRID_SIZE = 10
+def format_accelerator_label(label):
+    label = label.removeprefix("Press ")
+    valid, keyval, modifiers = Gtk.accelerator_parse(label)
+    if valid:
+        return Gtk.accelerator_get_label(keyval, modifiers)
+    return label
 
 
-class KeyboardShortcuts(Gtk.Dialog):
-    def __init__(self, settings, update_accelerator):
-        Gtk.Dialog.__init__(
-            self,
-            title="Emote Keyboard Shortcuts",
-            window_position=Gtk.WindowPosition.CENTER,
-            resizable=False,
-        )
+def current_accelerator_label():
+    return format_accelerator_label(user_data.load_accelerator()) or "Unassigned"
 
+
+class KeyboardShortcuts(Adw.Dialog):
+    def __init__(self, picker, update_accelerator):
+        super().__init__(title="Keyboard Shortcuts")
+        self.picker = picker
         self.update_accelerator = update_accelerator
+        self.recording = False
+        self.set_content_width(400)
+        self.set_content_height(420)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(24)
+        box.set_margin_bottom(24)
+        box.set_margin_start(24)
+        box.set_margin_end(24)
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(Adw.HeaderBar())
+        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroller.set_child(box)
+        toolbar.set_content(scroller)
+        self.set_child(toolbar)
 
-        header = Gtk.HeaderBar(title="Keyboard Shortcuts", show_close_button=True)
-        self.set_titlebar(header)
+        if config.is_wayland:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.append(Gtk.Label(label="Open Emote", xalign=0, hexpand=True))
+            self.global_shortcut_button = Gtk.Button(valign=Gtk.Align.CENTER)
+            self.global_shortcut_button.connect(
+                "clicked", self.setup_wayland_global_shortcut
+            )
+            self.global_shortcut_value = Gtk.Label(valign=Gtk.Align.CENTER)
+            self.global_shortcut_value.add_css_class("dim-label")
+            row.append(self.global_shortcut_button)
+            row.append(self.global_shortcut_value)
+            box.append(row)
+            self.refresh_wayland_global_shortcut()
+        else:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.append(Gtk.Label(label="Open Emote", xalign=0, hexpand=True))
+            self.record_button = Gtk.Button(label=current_accelerator_label())
+            self.record_button.connect("clicked", self.start_recording)
+            row.append(self.record_button)
+            box.append(row)
 
-        box = self.get_content_area()
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        shortcuts_grid = Gtk.Grid(
-            orientation=Gtk.Orientation.VERTICAL,
-            margin=GRID_SIZE,
-            row_spacing=GRID_SIZE,
+        shortcuts = user_data.load_shortcuts()
+        for label, binding in (
+            ("Select Emoji", "Enter"),
+            ("Add to Selection", "Shift+Enter"),
+            ("Focus Search", format_accelerator_label(shortcuts["focus_search"])),
+            ("Next Category", format_accelerator_label(shortcuts["next_category"])),
+            (
+                "Previous Category",
+                format_accelerator_label(shortcuts["previous_category"]),
+            ),
+            ("Close Picker", format_accelerator_label(shortcuts["close"])),
+        ):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.append(Gtk.Label(label=label, xalign=0, hexpand=True))
+            shortcut = Gtk.Label(label=binding)
+            shortcut.add_css_class("dim-label")
+            row.append(shortcut)
+            box.append(row)
+
+        settings_hint = Gtk.Label(
+            label=f"Change picker shortcuts in {user_data.SETTINGS_PATH}",
+            xalign=0,
+            wrap=True,
+            selectable=True,
         )
-        shortcuts_grid.set_row_homogeneous(False)
-        shortcuts_grid.set_column_homogeneous(True)
+        settings_hint.add_css_class("dim-label")
+        settings_hint.add_css_class("caption")
+        box.append(settings_hint)
 
-        row = 1
+        keys = Gtk.EventControllerKey.new()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self.on_key_pressed)
+        self.add_controller(keys)
 
-        if not config.is_wayland:
-            open_label = Gtk.Label("Open Emoji Picker")
-            open_label.set_alignment(0, 0.5)
-            shortcuts_grid.attach(open_label, 1, row, 1, 1)
-            open_keybinding = ButtonKeybinding()
-            open_keybinding.set_size_request(150, -1)
-            open_keybinding.connect("accel-edited", self.on_kb_changed)
-            open_keybinding.connect("accel-cleared", self.on_kb_changed)
-            open_keybinding.set_accel_string(settings.accelerator)
-            shortcuts_grid.attach(open_keybinding, 2, row, 1, 1)
-            row += 1
+    def setup_wayland_global_shortcut(self, _button):
+        application = self.picker.get_application()
+        if user_data.load_wayland_global_shortcut_choice() is True:
+            return
+        started = application.set_wayland_global_shortcut()
+        if started:
+            self.global_shortcut_button.set_label("Opening…")
+            self.global_shortcut_button.set_sensitive(False)
+        else:
+            self.refresh_wayland_global_shortcut()
 
-        select_label = Gtk.Label("Select Emoji")
-        select_label.set_alignment(0, 0.5)
-        shortcuts_grid.attach(select_label, 1, row, 1, 1)
-        select_shortcut = Gtk.ShortcutsShortcut(accelerator="Return")
-        shortcuts_grid.attach(select_shortcut, 2, row, 1, 1)
-        row += 1
+    def refresh_wayland_global_shortcut(self):
+        is_set = user_data.load_wayland_global_shortcut_choice() is True
+        if is_set:
+            shortcut_label = format_accelerator_label(
+                user_data.load_wayland_global_shortcut_label()
+            )
+            self.global_shortcut_value.set_label(shortcut_label)
+            self.global_shortcut_value.set_visible(True)
+            self.global_shortcut_button.set_visible(False)
+        else:
+            registered = self.picker.get_application().is_wayland_shortcut_registered()
+            self.global_shortcut_button.set_label(
+                "Details…" if registered else "Set up…"
+            )
+            self.global_shortcut_button.set_tooltip_text(
+                "About the disabled shortcut" if registered else "Set up shortcut"
+            )
+            self.global_shortcut_button.set_sensitive(True)
+            self.global_shortcut_button.set_visible(True)
+            self.global_shortcut_value.set_label("Disabled" if registered else "")
+            self.global_shortcut_value.set_visible(registered)
 
-        select_multi_label = Gtk.Label("Add Emoji to Selection")
-        select_multi_label.set_alignment(0, 0.5)
-        shortcuts_grid.attach(select_multi_label, 1, row, 1, 1)
-        select_multi_shortcut = Gtk.ShortcutsShortcut(accelerator="<Shift>+Return")
-        shortcuts_grid.attach(select_multi_shortcut, 2, row, 1, 1)
-        row += 1
+    def start_recording(self, _button):
+        self.recording = True
+        self.record_button.set_label("Press a shortcut…")
 
-        search_label = Gtk.Label("Focus Search")
-        search_label.set_alignment(0, 0.5)
-        shortcuts_grid.attach(search_label, 1, row, 1, 1)
-        search_shortcut = Gtk.ShortcutsShortcut(
-            accelerator=settings.shortcuts["focus_search"]
-        )
-        shortcuts_grid.attach(search_shortcut, 2, row, 1, 1)
-        row += 1
+    def on_key_pressed(self, _controller, keyval, _keycode, state):
+        if not self.recording:
+            return False
+        if keyval == Gdk.KEY_Escape:
+            self.record_button.set_label(current_accelerator_label())
+            self.recording = False
+            return True
+        if keyval == Gdk.KEY_BackSpace:
+            self.update_accelerator("")
+            self.record_button.set_label("Unassigned")
+            self.recording = False
+            return True
 
-        next_cat_label = Gtk.Label("Next Emoji Category")
-        next_cat_label.set_alignment(0, 0.5)
-        shortcuts_grid.attach(next_cat_label, 1, row, 1, 1)
-        next_cat_shortcut = Gtk.ShortcutsShortcut(
-            accelerator=settings.shortcuts["next_category"]
-        )
-        shortcuts_grid.attach(next_cat_shortcut, 2, row, 1, 1)
-        row += 1
-
-        prev_cat_label = Gtk.Label("Previous Emoji Category")
-        prev_cat_label.set_alignment(0, 0.5)
-        shortcuts_grid.attach(prev_cat_label, 1, row, 1, 1)
-        prev_cat_shortcut = Gtk.ShortcutsShortcut(
-            accelerator=settings.shortcuts["previous_category"]
-        )
-        shortcuts_grid.attach(prev_cat_shortcut, 2, row, 1, 1)
-        row += 1
-
-        close_label = Gtk.Label("Close Emoji Picker")
-        close_label.set_alignment(0, 0.5)
-        shortcuts_grid.attach(close_label, 1, row, 1, 1)
-        close_shortcut = Gtk.ShortcutsShortcut(accelerator=settings.shortcuts["close"])
-        shortcuts_grid.attach(close_shortcut, 2, row, 1, 1)
-
-        box.pack_start(shortcuts_grid, True, True, GRID_SIZE)
-
-        settings_path_label = Gtk.Label()
-        escaped_settings_path = GLib.markup_escape_text(str(SETTINGS_PATH))
-        settings_path_label.set_markup(
-            f"<small>Edit in {escaped_settings_path}</small>"
-        )
-        settings_path_label.set_selectable(True)
-        box.pack_start(settings_path_label, False, False, GRID_SIZE)
-
-        self.show_all()
-        self.present()
-
-    def on_kb_changed(self, button_keybinding, accel_string=None, accel_label=None):
-        self.update_accelerator(accel_string)
+        if keyval in MODIFIER_KEYS:
+            return True
+        modifiers = state & Gtk.accelerator_get_default_mod_mask()
+        if not modifiers & (
+            Gdk.ModifierType.CONTROL_MASK
+            | Gdk.ModifierType.ALT_MASK
+            | Gdk.ModifierType.SUPER_MASK
+        ):
+            self.record_button.set_label("Include Ctrl, Alt, or Super")
+            return True
+        accelerator = Gtk.accelerator_name(keyval, modifiers)
+        label = Gtk.accelerator_get_label(keyval, modifiers)
+        self.update_accelerator(accelerator)
+        self.record_button.set_label(label)
+        self.recording = False
+        return True

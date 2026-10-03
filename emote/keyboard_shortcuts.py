@@ -109,8 +109,9 @@ class KeyboardShortcuts(Adw.Dialog):
         else:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
             row.append(Gtk.Label(label="Open Emote", xalign=0, hexpand=True))
-            accelerator, label = user_data.load_accelerator()
-            self.record_button = Gtk.Button(child=ShortcutLabel(label, accelerator))
+            self.record_button = Gtk.Button(
+                child=ShortcutLabel("Unassigned", user_data.load_accelerator())
+            )
             self.record_button.connect("clicked", self.start_recording)
             row.append(self.record_button)
             box.append(row)
@@ -173,12 +174,13 @@ class KeyboardShortcuts(Adw.Dialog):
         if not self.recording:
             return False
         if keyval == Gdk.KEY_Escape:
-            accelerator, label = user_data.load_accelerator()
-            self.record_button.get_child().set_label(label, accelerator)
+            self.record_button.get_child().set_label(
+                "Unassigned", user_data.load_accelerator()
+            )
             self.recording = False
             return True
         if keyval == Gdk.KEY_BackSpace:
-            self.update_accelerator("", "Unassigned")
+            self.update_accelerator("")
             self.record_button.get_child().set_label("Unassigned", "")
             self.recording = False
             return True
@@ -195,7 +197,7 @@ class KeyboardShortcuts(Adw.Dialog):
             return True
         accelerator = Gtk.accelerator_name(keyval, modifiers)
         label = Gtk.accelerator_get_label(keyval, modifiers)
-        self.update_accelerator(accelerator, label)
+        self.update_accelerator(accelerator)
         self.record_button.get_child().set_label(label, accelerator)
         self.recording = False
         return True

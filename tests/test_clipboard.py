@@ -13,6 +13,7 @@ from emote.clipboard import (
     restoration_enabled,
 )
 from emote.settings import Settings
+from tests import isolate_user_data
 
 
 class ClipboardRestoreTests(TestCase):
@@ -182,9 +183,7 @@ class RestorePreferenceTests(TestCase):
         self.addCleanup(desktop.stop)
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        patcher = patch("emote.user_data.SHELVE_PATH", directory.name + "/settings")
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.addCleanup(isolate_user_data(directory.name).close)
 
     def test_default_off_and_effective_only_with_auto_paste(self):
         self.assertFalse(user_data.load_restore_clipboard_enabled())

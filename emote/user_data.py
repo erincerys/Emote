@@ -1,6 +1,9 @@
+import dbm
+import json
 import os
 from pathlib import Path
 import shelve
+import tempfile
 
 from emote import emojis, config
 
@@ -11,15 +14,18 @@ DATA_DIR = (
 )
 SHELVE_PATH = os.path.join(DATA_DIR, "user_data")
 
+SETTINGS_PATH = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.join(Path.home(), ".config"),
+    "Emote",
+    "settings.json",
+)
+
 RECENT_EMOJIS = "recent_emojis"
 DEFAULT_RECENT_EMOJIS = ["🙂", "😄", "❤️", "👍", "🤞", "🔥", "🤣", "😍", "😭"]
 MAX_RECENT_EMOJIS = 60
 
-ACCELERATOR_STRING = "accelerator_string"
-DEFAULT_ACCELERATOR_STRING = "<Primary><Alt>e"
-
-ACCELERATOR_LABEL = "accelerator_label"
-DEFAULT_ACCELERATOR_LABEL = "Ctrl+Alt+E"
+ACCELERATOR = "accelerator"
+DEFAULT_ACCELERATOR = "<Primary><Alt>e"
 
 WAYLAND_AUTO_PASTE = "wayland_auto_paste"
 X11_AUTO_PASTE = "x11_auto_paste"
@@ -51,9 +57,89 @@ EMOJI_FONT = "emoji_font"
 EMOJI_FONTS = ("noto", "system")
 EMOJI_FONT_LABELS = ("Noto", "System")
 
+DEFAULT_SETTINGS = {
+    ACCELERATOR: DEFAULT_ACCELERATOR,
+    SKINTONE_INDEX: DEFAULT_SKINTONE_INDEX,
+    EMOJI_SIZE: DEFAULT_EMOJI_SIZE,
+    PICKER_SIZE: list(DEFAULT_PICKER_SIZE),
+    X11_AUTO_PASTE: True,
+    WAYLAND_AUTO_PASTE: None,
+    RESTORE_CLIPBOARD: False,
+    EMOJI_FONT: EMOJI_FONTS[0],
+    SHOWN_WELCOME: False,
+}
+
+SHELVE_KEY_TO_SETTING = {
+    "accelerator_string": ACCELERATOR,
+    SKINTONE_INDEX: SKINTONE_INDEX,
+    EMOJI_SIZE: EMOJI_SIZE,
+    PICKER_SIZE: PICKER_SIZE,
+    X11_AUTO_PASTE: X11_AUTO_PASTE,
+    WAYLAND_AUTO_PASTE: WAYLAND_AUTO_PASTE,
+    RESTORE_CLIPBOARD: RESTORE_CLIPBOARD,
+    EMOJI_FONT: EMOJI_FONT,
+    SHOWN_WELCOME: SHOWN_WELCOME,
+}
+
 
 # Ensure the data dir exists
 os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def _legacy_settings():
+    try:
+        with shelve.open(SHELVE_PATH, flag="r") as db:
+            return {
+                key: db[legacy_key]
+                for legacy_key, key in SHELVE_KEY_TO_SETTING.items()
+                if legacy_key in db
+            }
+    except dbm.error:
+        return {}
+
+
+def _write_settings(settings):
+    config_dir = os.path.dirname(SETTINGS_PATH)
+    os.makedirs(config_dir, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=config_dir, suffix=".tmp", delete=False
+    ) as settings_file:
+        json.dump(settings, settings_file, indent=2)
+        settings_file.write("\n")
+    os.replace(settings_file.name, SETTINGS_PATH)
+
+
+def _load_or_create_settings():
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as settings_file:
+            settings = json.load(settings_file)
+    except FileNotFoundError:
+        settings = {**DEFAULT_SETTINGS, **_legacy_settings()}
+        _write_settings(settings)
+        return settings
+    except ValueError as error:
+        print(f"Ignoring unreadable {SETTINGS_PATH}: {error}")
+        return None
+    if not isinstance(settings, dict):
+        print(f"Ignoring {SETTINGS_PATH}: expected a JSON object")
+        return None
+    return settings
+
+
+def _read_setting(key, kind):
+    value = (_load_or_create_settings() or {}).get(key)
+    # Exact type check: bool is a subclass of int, and JSON numbers may be floats
+    return value if type(value) is kind else DEFAULT_SETTINGS[key]
+
+
+def _update_setting(key, value):
+    settings = _load_or_create_settings()
+    if settings is None:
+        os.replace(SETTINGS_PATH, SETTINGS_PATH + ".bak")
+        print(f"Moved unreadable settings to {SETTINGS_PATH}.bak")
+        settings = dict(DEFAULT_SETTINGS)
+    settings[key] = value
+    _write_settings(settings)
 
 
 def load_recent_emojis():
@@ -76,38 +162,28 @@ def update_recent_emojis(char):
 
 
 def load_accelerator():
-    with shelve.open(SHELVE_PATH) as db:
-        return (
-            db.get(ACCELERATOR_STRING, DEFAULT_ACCELERATOR_STRING),
-            db.get(ACCELERATOR_LABEL, DEFAULT_ACCELERATOR_LABEL),
-        )
+    return _read_setting(ACCELERATOR, str)
 
 
-def update_accelerator(accel_string, accel_label):
-    with shelve.open(SHELVE_PATH) as db:
-        db[ACCELERATOR_STRING] = accel_string
-        db[ACCELERATOR_LABEL] = accel_label
+def update_accelerator(accel):
+    _update_setting(ACCELERATOR, accel)
 
 
 def load_wayland_auto_paste_choice():
     """Return None until the user has chosen a Wayland paste mode."""
-    with shelve.open(SHELVE_PATH) as db:
-        return db.get(WAYLAND_AUTO_PASTE)
+    return _read_setting(WAYLAND_AUTO_PASTE, bool)
 
 
 def update_wayland_auto_paste_choice(enabled):
-    with shelve.open(SHELVE_PATH) as db:
-        db[WAYLAND_AUTO_PASTE] = bool(enabled)
+    _update_setting(WAYLAND_AUTO_PASTE, bool(enabled))
 
 
 def load_x11_auto_paste_enabled():
-    with shelve.open(SHELVE_PATH) as db:
-        return db.get(X11_AUTO_PASTE, True)
+    return _read_setting(X11_AUTO_PASTE, bool)
 
 
 def update_x11_auto_paste_enabled(enabled):
-    with shelve.open(SHELVE_PATH) as db:
-        db[X11_AUTO_PASTE] = bool(enabled)
+    _update_setting(X11_AUTO_PASTE, bool(enabled))
 
 
 def load_wayland_global_shortcut_choice():
@@ -117,13 +193,11 @@ def load_wayland_global_shortcut_choice():
 
 
 def load_restore_clipboard_enabled():
-    with shelve.open(SHELVE_PATH) as db:
-        return db.get(RESTORE_CLIPBOARD, False)
+    return _read_setting(RESTORE_CLIPBOARD, bool)
 
 
 def update_restore_clipboard_enabled(enabled):
-    with shelve.open(SHELVE_PATH) as db:
-        db[RESTORE_CLIPBOARD] = bool(enabled)
+    _update_setting(RESTORE_CLIPBOARD, bool(enabled))
 
 
 def update_wayland_global_shortcut_choice(enabled):
@@ -142,13 +216,11 @@ def update_wayland_global_shortcut_label(label):
 
 
 def load_shown_welcome():
-    with shelve.open(SHELVE_PATH) as db:
-        return db.get(SHOWN_WELCOME, False)
+    return _read_setting(SHOWN_WELCOME, bool)
 
 
 def update_shown_welcome():
-    with shelve.open(SHELVE_PATH) as db:
-        db[SHOWN_WELCOME] = True
+    _update_setting(SHOWN_WELCOME, True)
 
 
 def normalize_picker_size(size):
@@ -160,13 +232,11 @@ def normalize_picker_size(size):
 
 
 def load_picker_size():
-    with shelve.open(SHELVE_PATH) as db:
-        return normalize_picker_size(db.get(PICKER_SIZE, DEFAULT_PICKER_SIZE))
+    return normalize_picker_size(_read_setting(PICKER_SIZE, list))
 
 
 def update_picker_size(width, height):
-    with shelve.open(SHELVE_PATH) as db:
-        db[PICKER_SIZE] = normalize_picker_size((width, height))
+    _update_setting(PICKER_SIZE, list(normalize_picker_size((width, height))))
 
 
 def normalize_emoji_size(size):
@@ -177,31 +247,26 @@ def normalize_emoji_size(size):
 
 
 def load_emoji_size():
-    with shelve.open(SHELVE_PATH) as db:
-        return normalize_emoji_size(db.get(EMOJI_SIZE, DEFAULT_EMOJI_SIZE))
+    return normalize_emoji_size(_read_setting(EMOJI_SIZE, int))
 
 
 def update_emoji_size(size):
-    with shelve.open(SHELVE_PATH) as db:
-        db[EMOJI_SIZE] = normalize_emoji_size(size)
+    _update_setting(EMOJI_SIZE, normalize_emoji_size(size))
 
 
 def load_skintone_index():
-    with shelve.open(SHELVE_PATH) as db:
-        return db.get(SKINTONE_INDEX, DEFAULT_SKINTONE_INDEX)
+    index = _read_setting(SKINTONE_INDEX, int)
+    return index if 0 <= index < len(SKINTONES) else DEFAULT_SKINTONE_INDEX
 
 
 def load_emoji_font():
-    with shelve.open(SHELVE_PATH) as db:
-        font = db.get(EMOJI_FONT, "noto")
-        return font if font in EMOJI_FONTS else "noto"
+    font = _read_setting(EMOJI_FONT, str)
+    return font if font in EMOJI_FONTS else EMOJI_FONTS[0]
 
 
 def update_emoji_font(font):
-    with shelve.open(SHELVE_PATH) as db:
-        db[EMOJI_FONT] = font if font in EMOJI_FONTS else "noto"
+    _update_setting(EMOJI_FONT, font if font in EMOJI_FONTS else EMOJI_FONTS[0])
 
 
 def update_skintone_index(skintone):
-    with shelve.open(SHELVE_PATH) as db:
-        db[SKINTONE_INDEX] = skintone
+    _update_setting(SKINTONE_INDEX, skintone)

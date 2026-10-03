@@ -9,15 +9,14 @@ from emote.keyboard_shortcuts import (
     parse_shortcut_accelerator,
 )
 from gi.repository import Gdk
+from tests import isolate_user_data
 
 
 class KeyboardShortcutLabelTests(TestCase):
     def setUp(self):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        patcher = patch("emote.user_data.SHELVE_PATH", directory.name + "/user_data")
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.addCleanup(isolate_user_data(directory.name).close)
 
     def test_parses_portal_descriptions_for_keycaps(self):
         for description in ("<Control><Alt>e", "Ctrl+Alt+E", "Press Ctrl+Alt+E"):
@@ -69,9 +68,7 @@ class KeyboardShortcutLabelTests(TestCase):
             Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK,
         )
         self.assertFalse(dialog.recording)
-        dialog.update_accelerator.assert_called_once_with(
-            "<Control><Alt>e", "Ctrl+Alt+E"
-        )
+        dialog.update_accelerator.assert_called_once_with("<Control><Alt>e")
         dialog.record_button.get_child().set_label.assert_called_once_with(
             "Ctrl+Alt+E", "<Control><Alt>e"
         )

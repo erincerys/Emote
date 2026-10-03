@@ -52,9 +52,13 @@ Open **Preferences** to change the emoji size, skin tone, or font. Emote include
 | Open or close the picker | `Ctrl+Alt+E` (default global shortcut) |
 | Select emoji | `Enter` |
 | Add emoji to selection | `Shift+Enter` |
+| Focus search | `Ctrl+F` |
 | Next category | `Ctrl+Tab` |
 | Previous category | `Ctrl+Shift+Tab` |
+| Close the picker | `Escape` |
 | Quit Emote | `Ctrl+Q` |
+
+You can change the search, category and close shortcuts in the [settings file](#settings-file).
 
 ### Settings file
 
@@ -76,7 +80,13 @@ Emote creates the file with these defaults the first time it starts:
   "wayland_auto_paste": null,
   "restore_clipboard": false,
   "emoji_font": "noto",
-  "shown_welcome": false
+  "shown_welcome": false,
+  "shortcuts": {
+    "focus_search": "<Primary>f",
+    "next_category": "<Primary>Tab",
+    "previous_category": "<Primary><Shift>Tab",
+    "close": "Escape"
+  }
 }
 ```
 
@@ -87,6 +97,7 @@ Emote creates the file with these defaults the first time it starts:
 - `restore_clipboard` puts your previous clipboard back after an automatic paste.
 - `emoji_font` is `noto` (the bundled Noto Color Emoji) or `system`.
 - Set `shown_welcome` to `true` to skip the picker that opens on first launch.
+- `shortcuts` holds the picker's own shortcuts in GTK accelerator syntax: modifiers such as `<Primary>`, `<Shift>`, `<Alt>` or `<Super>`, then a key name such as `Tab`, `Escape` or `n`. A shortcut without a modifier also fires while you type in the search box. Emote falls back to the default for any shortcut it cannot parse.
 
 Restart Emote after editing the file. Emote only rewrites the keys it changes, so a running Emote won't overwrite your edits. Emote ignores a value of the wrong type and uses the default instead. If the file is not valid JSON, Emote uses the defaults and moves the file to `settings.json.bak` the next time it saves a setting.
 

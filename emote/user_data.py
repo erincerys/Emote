@@ -57,6 +57,14 @@ EMOJI_FONT = "emoji_font"
 EMOJI_FONTS = ("noto", "system")
 EMOJI_FONT_LABELS = ("Noto", "System")
 
+SHORTCUTS = "shortcuts"
+DEFAULT_SHORTCUTS = {
+    "focus_search": "<Primary>f",
+    "next_category": "<Primary>Tab",
+    "previous_category": "<Primary><Shift>Tab",
+    "close": "Escape",
+}
+
 DEFAULT_SETTINGS = {
     ACCELERATOR: DEFAULT_ACCELERATOR,
     SKINTONE_INDEX: DEFAULT_SKINTONE_INDEX,
@@ -67,6 +75,7 @@ DEFAULT_SETTINGS = {
     RESTORE_CLIPBOARD: False,
     EMOJI_FONT: EMOJI_FONTS[0],
     SHOWN_WELCOME: False,
+    SHORTCUTS: DEFAULT_SHORTCUTS,
 }
 
 SHELVE_KEY_TO_SETTING = {
@@ -270,3 +279,11 @@ def update_emoji_font(font):
 
 def update_skintone_index(skintone):
     _update_setting(SKINTONE_INDEX, skintone)
+
+
+def load_shortcuts():
+    shortcuts = _read_setting(SHORTCUTS, dict)
+    return {
+        action: shortcuts[action] if type(shortcuts.get(action)) is str else default
+        for action, default in DEFAULT_SHORTCUTS.items()
+    }

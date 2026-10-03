@@ -118,17 +118,30 @@ class KeyboardShortcuts(Adw.Dialog):
 
         box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
+        shortcuts = user_data.load_shortcuts()
         for label, binding in (
             ("Select Emoji", "Return"),
             ("Add to Selection", "<Shift>Return"),
-            ("Next Category", "<Control>Tab"),
-            ("Previous Category", "<Control><Shift>Tab"),
+            ("Focus Search", shortcuts["focus_search"]),
+            ("Next Category", shortcuts["next_category"]),
+            ("Previous Category", shortcuts["previous_category"]),
+            ("Close Picker", shortcuts["close"]),
         ):
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
             row.append(Gtk.Label(label=label, xalign=0, hexpand=True))
             shortcut = ShortcutLabel(accelerator=binding)
             row.append(shortcut)
             box.append(row)
+
+        settings_hint = Gtk.Label(
+            label=f"Change picker shortcuts in {user_data.SETTINGS_PATH}",
+            xalign=0,
+            wrap=True,
+            selectable=True,
+        )
+        settings_hint.add_css_class("dim-label")
+        settings_hint.add_css_class("caption")
+        box.append(settings_hint)
 
         keys = Gtk.EventControllerKey.new()
         keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)

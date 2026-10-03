@@ -37,6 +37,4 @@ package() {
   meson install -C build --destdir "$pkgdir"
   install -Dm 644 "$_pkgname/LICENSE.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
   # Start automatically by default
-  install -Dm 644 "$pkgdir/usr/share/applications/com.tomjwatson.Emote.desktop" "$pkgdir/etc/xdg/autostart/com.tomjwatson.Emote.desktop"
-  rm -r "$pkgdir"/usr/share/emote/emote/{emote.in,meson.build} "$pkgdir"/usr/share/emote/static/meson.build
-}
+  install -Dm 644 "$pkgdir/usr/share/applications/com.tomjwatson.Emote.desktop" "$pkgdir/etc/xdg/autostart/com.tomjwatson.Emote.desktop"}

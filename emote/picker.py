@@ -569,15 +569,15 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
 
         motion = Gtk.EventControllerMotion.new()
         motion.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        motion.connect("enter", self.on_row_motion, box)
-        motion.connect("motion", self.on_row_motion, box)
-        motion.connect("leave", self.on_row_leave, box)
+        motion.connect("enter", self.on_row_motion)
+        motion.connect("motion", self.on_row_motion)
+        motion.connect("leave", self.on_row_leave)
         box.add_controller(motion)
 
         right_click = Gtk.GestureClick.new()
         right_click.set_button(3)
         right_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        right_click.connect("pressed", self.on_row_right_pressed, box)
+        right_click.connect("pressed", self.on_row_right_pressed)
         box.add_controller(right_click)
         list_item.set_child(box)
         list_item.set_selectable(False)
@@ -675,19 +675,21 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
                     return button.emoji_index
         return None
 
-    def on_row_motion(self, _controller, x, _y, box):
+    def on_row_motion(self, controller, x, _y):
+        box = controller.get_widget()
         index = self.row_index_at(box, x)
         if box.hovered_index != index:
             box.hovered_index = index
             self.update_preview(index)
 
-    def on_row_leave(self, _controller, box):
+    def on_row_leave(self, controller):
+        box = controller.get_widget()
         if box.hovered_index is not None:
             box.hovered_index = None
             self.update_preview()
 
-    def on_row_right_pressed(self, _gesture, _n_press, x, _y, box):
-        index = self.row_index_at(box, x)
+    def on_row_right_pressed(self, gesture, _n_press, x, _y):
+        index = self.row_index_at(gesture.get_widget(), x)
         if index is not None:
             self.append_emoji(index)
 

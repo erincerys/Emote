@@ -23,6 +23,7 @@ install_data(
   'clipboard.py',
   'css.py',
   'debouncer.py',
+  'diag.py',
   'emojis.py',
   'emoji_font.py',
   'keyboard_shortcuts.py',

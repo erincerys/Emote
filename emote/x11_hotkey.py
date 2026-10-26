@@ -1,11 +1,14 @@
 """X11 shortcut listener kept separate from GTK's toolkit version."""
 
 import threading
+import time
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
+
+from emote import diag
 
 
 class X11Hotkey:
@@ -63,6 +66,7 @@ class X11Hotkey:
         self.thread = threading.Thread(
             target=self._listen,
             args=(connection, root, keycode, mask, lock_masks, self.stop_event),
+            name="emote-hotkey",
             daemon=True,
         )
         self.thread.start()
@@ -71,10 +75,16 @@ class X11Hotkey:
         from Xlib import X
 
         try:
+            last_wake = time.monotonic()
             while not stop_event.wait(0.04):
+                wake = time.monotonic()
+                loop_seconds, last_wake = wake - last_wake, wake
+                if loop_seconds > 1:
+                    diag.listener_starved(loop_seconds)
                 while connection.pending_events():
                     event = connection.next_event()
                     if event.type == X.KeyPress:
+                        diag.key_pressed(event.time, loop_seconds)
                         # GTK has not seen this Xlib event. Give it the user
                         # timestamp so the window manager can transfer focus.
                         GLib.idle_add(self.callback, f"_TIME{event.time}")

@@ -1,6 +1,10 @@
 from contextlib import ExitStack
 from unittest.mock import patch
 
+from emote import diag
+
+diag.disable()
+
 
 def isolate_user_data(directory):
     stack = ExitStack()

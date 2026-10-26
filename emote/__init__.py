@@ -7,7 +7,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk
 
-from emote import config, css, emojis, picker, user_data
+from emote import config, css, diag, emojis, picker, user_data
 from emote.clipboard import restoration_enabled
 from emote.x11_hotkey import X11Hotkey
 from emote.wayland_paste import (
@@ -49,15 +49,20 @@ class EmoteApplication(Adw.Application):
 
         if self.picker_window:
             if not self.picker_window.get_visible():
+                diag.mark("activate")
                 self.picker_window.prepare_for_open()
+                diag.mark("prepared")
             self.prepare_picker_focus()
             self.picker_window.present()
+            diag.presented(self.picker_window)
             self.on_picker_presented()
         else:
+            diag.mark("activate")
             self.create_picker_window()
 
     def start_daemon(self):
         setproctitle("emote")
+        diag.daemon_started()
         css.load_css()
         emojis.init()
         self.hold()  # Keep the shortcut service alive when the picker is closed.
@@ -127,8 +132,10 @@ class EmoteApplication(Adw.Application):
 
     def on_hotkey(self, activation_token=None):
         if self.picker_window and self.picker_window.get_visible():
+            diag.mark("dispatch", action="close")
             self.close_picker_window()
         else:
+            diag.mark("dispatch", action="open")
             self.pending_activation_token = activation_token
             self.activate()
 
@@ -141,8 +148,10 @@ class EmoteApplication(Adw.Application):
             application=self,
             update_accelerator=self.update_accelerator,
         )
+        diag.mark("prepared")
         self.prepare_picker_focus()
         self.picker_window.present()
+        diag.presented(self.picker_window)
         self.on_picker_presented()
 
     def prepare_picker_focus(self):
@@ -460,6 +469,7 @@ class EmoteApplication(Adw.Application):
                 user_data.update_picker_size(width, height)
             window.prepare_for_close()
             window.hide()
+            diag.picker_hidden()
 
     def do_shutdown(self):
         if self.wayland_paste:

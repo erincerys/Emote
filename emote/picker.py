@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import time
 
 import gi
 
@@ -15,9 +16,20 @@ try:
 except (ImportError, ValueError):
     GdkWayland = None
 
-from emote import config, css, debouncer, emoji_font, emojis, user_data, x11_window
+from emote import (
+    config,
+    css,
+    debouncer,
+    diag,
+    emoji_font,
+    emojis,
+    user_data,
+    x11_window,
+)
 from emote.picker_dialogs import PickerDialogs
 from emote.clipboard import ClipboardRestore, restoration_enabled
+
+MIN_SEARCH_LENGTH = 3
 
 CATEGORY_ICONS = {
     "recent": "emote-category-recent-symbolic",
@@ -146,7 +158,8 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         self.portal_parent_callbacks = []
         self.portal_parent_toplevel = None
         self.recent_dirty = False
-        self.search_debouncer = debouncer.SearchDebouncer(self.apply_search)
+        self.search_keyed_at = None
+        self.search_debouncer = debouncer.SearchDebouncer(self.run_search)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         root.add_css_class("picker")
@@ -356,7 +369,7 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
             row = self.rows.get_item(self.emoji_rows[self.selected_index])
             selected = (row.category, self.display_emojis[self.selected_index]["char"])
         query = self.search_entry.get_text().strip()
-        if query:
+        if len(query) >= MIN_SEARCH_LENGTH:
             self.apply_search(query)
         else:
             category = self.active_category
@@ -567,9 +580,15 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         self.searching = False
         self.set_active_category("recent")
 
+    def run_search(self, query):
+        started = time.monotonic()
+        self.apply_search(query)
+        results = len(self.display_emojis) if self.searching else None
+        diag.search_applied(self, query, results, self.search_keyed_at, started)
+
     def apply_search(self, query):
         query = query.strip()
-        if not query:
+        if len(query) < MIN_SEARCH_LENGTH:
             if not self.searching:
                 return
             position = self.search_scroll_position
@@ -936,6 +955,7 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         self.active_category = category
 
     def on_search_changed(self, entry):
+        self.search_keyed_at = time.monotonic()
         self.search_debouncer.search(entry.get_text())
 
     def on_close_request(self, _window):
@@ -953,14 +973,17 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
 
     def on_realize(self, _window):
         self.get_surface().connect("notify::state", self.on_active_changed)
+        diag.watch_surface(self.get_surface())
         x11_window.configure_picker(self.get_surface())
 
     def on_map(self, _window):
+        diag.picker_mapped(self)
         x11_window.center_picker(self.get_surface())
 
     def on_active_changed(self, _window, _property):
         if self.is_active():
             self.was_active = True
+            diag.mark("active")
         else:
             self.maybe_schedule_inactive_close()
 

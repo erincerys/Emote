@@ -3,7 +3,11 @@ from unittest import TestCase
 from unittest.mock import Mock, patch
 from tempfile import TemporaryDirectory
 
-from emote.keyboard_shortcuts import KeyboardShortcuts, format_accelerator_label
+from emote.keyboard_shortcuts import (
+    KeyboardShortcuts,
+    ShortcutLabel,
+    parse_shortcut_accelerator,
+)
 from gi.repository import Gdk
 from tests import isolate_user_data
 
@@ -14,8 +18,34 @@ class KeyboardShortcutLabelTests(TestCase):
         self.addCleanup(directory.cleanup)
         self.addCleanup(isolate_user_data(directory.name).close)
 
-    def test_formats_portal_accelerator_syntax(self):
-        self.assertEqual(format_accelerator_label("<Control><Alt>t"), "Ctrl+Alt+T")
+    def test_parses_portal_descriptions_for_keycaps(self):
+        for description in ("<Control><Alt>e", "Ctrl+Alt+E", "Press Ctrl+Alt+E"):
+            with self.subTest(description=description):
+                self.assertEqual(
+                    parse_shortcut_accelerator(description), "<Control><Alt>e"
+                )
+
+    def test_preserves_unknown_portal_descriptions_as_text(self):
+        for description in (
+            "",
+            "Disabled",
+            "Unassigned",
+            "Press a shortcut…",
+            "Include Ctrl, Alt, or Super",
+            "Custom+E",
+            "Desktop shortcut: Ctrl+E",
+        ):
+            with self.subTest(description=description):
+                self.assertIsNone(parse_shortcut_accelerator(description))
+
+    def test_recording_prompt_is_preserved_verbatim(self):
+        label = SimpleNamespace(keycaps=Mock(), text=Mock())
+
+        ShortcutLabel.set_label(label, "Press a shortcut…")
+
+        label.text.set_label.assert_called_once_with("Press a shortcut…")
+        label.text.set_visible.assert_called_once_with(True)
+        label.keycaps.set_visible.assert_called_once_with(False)
 
     def test_recording_waits_for_non_modifier_key(self):
         dialog = SimpleNamespace(
@@ -39,6 +69,9 @@ class KeyboardShortcutLabelTests(TestCase):
         )
         self.assertFalse(dialog.recording)
         dialog.update_accelerator.assert_called_once_with("<Control><Alt>e")
+        dialog.record_button.get_child().set_label.assert_called_once_with(
+            "Ctrl+Alt+E", "<Control><Alt>e"
+        )
 
     def test_shift_alone_is_not_a_global_shortcut(self):
         dialog = SimpleNamespace(
@@ -55,7 +88,9 @@ class KeyboardShortcutLabelTests(TestCase):
         dialog.update_accelerator.assert_not_called()
 
     def test_removes_portal_press_prefix(self):
-        self.assertEqual(format_accelerator_label("Press Ctrl+Alt+E"), "Ctrl+Alt+E")
+        self.assertEqual(
+            parse_shortcut_accelerator("Press <Control><Alt>t"), "<Control><Alt>t"
+        )
 
     @patch(
         "emote.keyboard_shortcuts.user_data.load_wayland_global_shortcut_choice",
@@ -93,7 +128,7 @@ class KeyboardShortcutLabelTests(TestCase):
 
         KeyboardShortcuts.refresh_wayland_global_shortcut(dialog)
 
-        value.set_label.assert_called_once_with("Ctrl+Alt+T")
+        value.set_label.assert_called_once_with("Press <Control><Alt>t")
         value.set_visible.assert_called_once_with(True)
         button.set_visible.assert_called_once_with(False)
 

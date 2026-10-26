@@ -1,5 +1,6 @@
 """A continuous emoji catalogue for GTK 4."""
 
+import os
 import subprocess
 
 import gi
@@ -14,8 +15,9 @@ try:
 except (ImportError, ValueError):
     GdkWayland = None
 
-from emote import config, css, debouncer, emojis, user_data
+from emote import config, css, debouncer, emoji_font, emojis, user_data, x11_window
 from emote.picker_dialogs import PickerDialogs
+from emote.clipboard import ClipboardRestore, restoration_enabled
 
 CATEGORY_ICONS = {
     "recent": "emote-category-recent-symbolic",
@@ -58,6 +60,18 @@ class PickerRow(GObject.Object):
         self.start_index = start_index
 
 
+class EmojiLabel(Gtk.Label):
+    def __init__(self):
+        super().__init__()
+        self.set_overflow(Gtk.Overflow.HIDDEN)
+
+    def do_measure(self, orientation, for_size):
+        # A system font may split a joined emoji; keep it within its grid cell.
+        if orientation == Gtk.Orientation.HORIZONTAL:
+            return 0, 0, -1, -1
+        return Gtk.Label.do_measure(self, orientation, for_size)
+
+
 class WidthAwareScrolledWindow(Gtk.ScrolledWindow):
     def __init__(self, width_changed):
         super().__init__()
@@ -67,6 +81,7 @@ class WidthAwareScrolledWindow(Gtk.ScrolledWindow):
 
     def do_size_allocate(self, width, height, baseline):
         Gtk.ScrolledWindow.do_size_allocate(self, width, height, baseline)
+        width = round(self.get_hadjustment().get_page_size())
         if width > 0 and width != self.last_width:
             self.last_width = width
             if self.pending_width_update is not None:
@@ -88,11 +103,18 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         self.update_accelerator = update_accelerator
         self.set_default_size(*user_data.load_picker_size())
         self.set_size_request(-1, 300)
-        self.set_resizable(False)
-        self.set_decorated(False)
+        self.set_resizable(True)
         self.set_hide_on_close(False)
 
         self.appended = []
+        display = Gdk.Display.get_default()
+        self.clipboard_restore = ClipboardRestore(
+            display.get_clipboard(),
+            needs_portal=config.is_wayland
+            and (not config.is_kde or display.__gtype__.name != "GdkWaylandDisplay"),
+            portal_restoration=not config.is_kde,
+        )
+        self.selection_pending = False
         self.display_emojis = []
         self.emoji_rows = {}
         self.category_rows = {}
@@ -105,11 +127,12 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         self.emojis_per_row = 1
         self.active_category = "recent"
         self.category_jump = None
-        self.pending_category_restore = None
+        self.pending_grid_restore = None
         self.pending_scroll_update = None
         self.search_scroll_position = None
         self.search_scroll_category = None
         self.search_selected_index = None
+        self.search_grid_state = None
         self.pending_search_scroll_restore = None
         self.search_scroll_restore_handler = None
         self.search_scroll_restore_target = None
@@ -130,6 +153,7 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         root.add_css_class(f"emoji-size-{self.emoji_size}")
         self.root = root
         self.set_content(root)
+        self.apply_emoji_font(user_data.load_emoji_font())
         toolbar = Adw.ToolbarView()
         toolbar.set_top_bar_style(Adw.ToolbarStyle.RAISED)
         toolbar.set_bottom_bar_style(Adw.ToolbarStyle.RAISED)
@@ -153,6 +177,7 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         pointer.connect("leave", self.on_pointer_leave)
         self.add_controller(pointer)
         self.connect("realize", self.on_realize)
+        self.connect("map", self.on_map)
         self.connect("notify::is-active", self.on_active_changed)
         self.connect("close-request", self.on_close_request)
 
@@ -169,7 +194,7 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.set_placeholder_text("Search emoji")
         self.search_entry.set_hexpand(True)
-        self.search_entry.connect("search-changed", self.on_search_changed)
+        self.search_entry.connect("changed", self.on_search_changed)
         bar.append(self.search_entry)
 
         menu = Gio.Menu()
@@ -178,6 +203,9 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         standard_section.append("Keyboard Shortcuts", "win.shortcuts")
         standard_section.append("About Emote", "win.about")
         menu.append_section(None, standard_section)
+        quit_section = Gio.Menu()
+        quit_section.append("Quit Emote", "app.quit")
+        menu.append_section(None, quit_section)
         self.menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic")
         self.menu_button.set_tooltip_text("Menu")
         self.menu_button.set_menu_model(menu)
@@ -235,9 +263,8 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         self.list_view.set_single_click_activate(False)
         self.scroller = WidthAwareScrolledWindow(self.on_grid_width_changed)
         self.scroller.set_vexpand(True)
-        # Rebuilt rows must not raise the window's minimum width.
-        self.scroller.set_min_content_width(460)
-        self.scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        # EXTERNAL keeps row widths from increasing the window's minimum size.
+        self.scroller.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.AUTOMATIC)
         self.scroller.set_child(self.list_view)
         self.scroller.get_vadjustment().connect("value-changed", self.on_scroll_changed)
 
@@ -245,6 +272,7 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         self.footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self.footer.add_css_class("preview-footer")
         self.preview_emoji = Gtk.Label()
+        self.preview_emoji.set_attributes(self.emoji_attributes)
         self.preview_emoji.add_css_class("preview-emoji")
         self.preview_emoji.set_valign(Gtk.Align.CENTER)
         self.footer.append(self.preview_emoji)
@@ -259,23 +287,50 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         labels.append(self.preview_name)
         self.footer.append(labels)
 
+        self.selection_box = Gtk.Box(spacing=6, visible=False)
+        self.selection_count_label = Gtk.Label(valign=Gtk.Align.CENTER)
+        self.selection_count_label.add_css_class("selection-count")
+        self.selection_count_label.add_css_class("dim-label")
+        self.selection_count_label.set_visible(False)
+        self.selection_box.append(self.selection_count_label)
+
         self.selection_label = Gtk.Label()
+        self.selection_label.set_attributes(self.emoji_attributes)
         self.selection_label.add_css_class("selection-count")
-        self.selection_label.add_css_class("dim-label")
-        self.selection_label.set_ellipsize(Pango.EllipsizeMode.START)
-        self.selection_label.set_max_width_chars(12)
+        self.selection_label.add_css_class("emoji-glyph")
         self.selection_label.set_visible(False)
         self.selection_label.set_valign(Gtk.Align.CENTER)
-        self.footer.append(self.selection_label)
+        self.selection_box.append(self.selection_label)
+        self.footer.append(self.selection_box)
 
-    @staticmethod
-    def columns_for_width(width, size):
-        # Keep roughly 20 px around each emoji, then share any spare
-        # width evenly across the row.
-        return max(1, (width - 8) // (size + 20))
+    def columns_for_width(self, width):
+        # Row padding plus Gtk.ListView's row borders.
+        return max(1, (width - 12) // (self.emoji_size + 20))
+
+    def apply_emoji_font(self, choice):
+        font_map, self.bundled_emoji_font = emoji_font.create_font_map(choice)
+        self.root.set_font_map(font_map)
+        self.emoji_attributes = None
+        if self.bundled_emoji_font:
+            self.root.add_css_class("bundled-emojis")
+            # Pango's emoji fallback can override an explicitly chosen family.
+            self.emoji_attributes = Pango.AttrList()
+            self.emoji_attributes.insert(Pango.attr_fallback_new(False))
+        else:
+            self.root.remove_css_class("bundled-emojis")
+        for name in ("preview_emoji", "selection_label"):
+            label = getattr(self, name, None)
+            if label is not None:
+                label.set_attributes(self.emoji_attributes)
+
+    def set_emoji_font(self, choice):
+        self.apply_emoji_font(choice)
+        user_data.update_emoji_font(choice)
+        self.emojis_per_row = self.columns_for_width(self.scroller.last_width)
+        self.refresh_rows()
 
     def on_grid_width_changed(self, width):
-        columns = self.columns_for_width(width, self.emoji_size)
+        columns = self.columns_for_width(width)
         if columns != self.emojis_per_row or self.rows.get_n_items() == 0:
             self.emojis_per_row = columns
             self.refresh_rows()
@@ -286,25 +341,65 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
             return
         self.root.remove_css_class(f"emoji-size-{self.emoji_size}")
         self.emoji_size = size
-        self.emojis_per_row = self.columns_for_width(self.scroller.get_width(), size)
         self.root.add_css_class(f"emoji-size-{size}")
+        self.emojis_per_row = self.columns_for_width(self.scroller.last_width)
         user_data.update_emoji_size(size)
         self.refresh_rows()
 
     def refresh_rows(self):
-        if self.pending_category_restore is not None:
-            GLib.source_remove(self.pending_category_restore)
-            self.pending_category_restore = None
+        if self.pending_grid_restore is not None:
+            GLib.source_remove(self.pending_grid_restore)
+            self.pending_grid_restore = None
+        anchor = self.get_grid_anchor()
+        selected = None
+        if self.display_emojis:
+            row = self.rows.get_item(self.emoji_rows[self.selected_index])
+            selected = (row.category, self.display_emojis[self.selected_index]["char"])
         query = self.search_entry.get_text().strip()
         if query:
             self.apply_search(query)
         else:
             category = self.active_category
-            self.show_catalogue()
-            if category != "recent":
-                self.pending_category_restore = GLib.timeout_add(
-                    100, self.restore_category_after_resize, category
-                )
+            self.show_catalogue(reset_scroll=False)
+            self.set_active_category(category)
+        if selected is not None:
+            _row, index = self.find_grid_item(*selected)
+            if index is not None:
+                self.selected_index = index
+                self.update_visible_selection()
+                self.update_preview()
+        if anchor is not None:
+            self.pending_grid_restore = GLib.timeout_add(
+                100, self.restore_grid_anchor, anchor
+            )
+
+    def get_grid_anchor(self):
+        closest = None
+        for box, row in self.visible_rows.items():
+            if not box.get_mapped() or box.get_height() == 0:
+                continue
+            success, rect = box.compute_bounds(self.scroller)
+            if not success:
+                continue
+            y = rect.get_y()
+            if y + rect.get_height() <= 0 or y >= self.scroller.get_height():
+                continue
+            if closest is None or y < closest[2]:
+                char = row.entries[0]["char"] if row.entries else None
+                closest = (row.category, char, y)
+        return closest
+
+    def find_grid_item(self, category, char):
+        for row_number in range(self.rows.get_n_items()):
+            row = self.rows.get_item(row_number)
+            if row.category != category:
+                continue
+            if char is None and row.title is not None:
+                return row_number, None
+            for offset, emoji in enumerate(row.entries):
+                if emoji["char"] == char:
+                    return row_number, row.start_index + offset
+        return None, None
 
     def prepare_for_open(self):
         self.was_active = False
@@ -312,11 +407,15 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         self.search_scroll_position = None
         self.search_scroll_category = None
         self.search_selected_index = None
+        self.search_grid_state = None
         self.appended.clear()
+        self.selection_count_label.set_text("")
+        self.selection_count_label.set_visible(False)
         self.selection_label.set_text("")
         self.selection_label.set_visible(False)
+        self.selection_box.set_visible(False)
         self.search_debouncer.cancel()
-        columns = self.columns_for_width(self.scroller.last_width, self.emoji_size)
+        columns = self.columns_for_width(self.scroller.last_width)
         width_changed = self.scroller.last_width > 0 and columns != self.emojis_per_row
         if width_changed:
             self.emojis_per_row = columns
@@ -334,6 +433,9 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         GLib.idle_add(self.focus_search_entry)
 
     def prepare_for_close(self):
+        if self.selection_pending:
+            self.selection_pending = False
+            self.clipboard_restore.cancel()
         self.was_active = False
         self.pointer_in_picker = False
         self.waiting_for_wayland_setup = False
@@ -344,9 +446,9 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
         if self.scroller.pending_width_update is not None:
             GLib.source_remove(self.scroller.pending_width_update)
             self.scroller.pending_width_update = None
-        if self.pending_category_restore is not None:
-            GLib.source_remove(self.pending_category_restore)
-            self.pending_category_restore = None
+        if self.pending_grid_restore is not None:
+            GLib.source_remove(self.pending_grid_restore)
+            self.pending_grid_restore = None
         if self.pending_scroll_update is not None:
             GLib.source_remove(self.pending_scroll_update)
             self.pending_scroll_update = None
@@ -428,10 +530,16 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
                 self.visible_buttons[index] = button
         self.recent_dirty = False
 
-    def restore_category_after_resize(self, category):
-        self.pending_category_restore = None
-        if self.get_visible():
-            self.on_category_clicked(None, category)
+    def restore_grid_anchor(self, anchor):
+        self.pending_grid_restore = None
+        category, char, offset = anchor
+        row_number, _index = self.find_grid_item(category, char)
+        if self.get_visible() and row_number is not None:
+            position = self.category_scroll_position(row_number)
+            if position is not None:
+                self.scroller.get_vadjustment().set_value(position - offset)
+            else:
+                self.list_view.scroll_to(row_number, Gtk.ListScrollFlags.NONE, None)
         return GLib.SOURCE_REMOVE
 
     def show_catalogue(self, reset_scroll=True):
@@ -467,41 +575,65 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
             position = self.search_scroll_position
             category = self.search_scroll_category
             selected_index = self.search_selected_index
+            grid_state = self.search_grid_state
             self.show_catalogue(reset_scroll=False)
             self.search_scroll_position = None
             self.search_scroll_category = None
             self.search_selected_index = None
+            self.search_grid_state = None
+            if grid_state is not None:
+                _columns, _anchor, category_id, char = grid_state
+                _row, selected_index = self.find_grid_item(category_id, char)
             if selected_index is not None and self.display_emojis:
                 self.selected_index = min(selected_index, len(self.display_emojis) - 1)
                 self.update_visible_selection()
                 self.update_preview()
-            if position is not None:
+            if (
+                grid_state is not None
+                and grid_state[0] != self.emojis_per_row
+                and grid_state[1] is not None
+            ):
+                self.pending_grid_restore = GLib.timeout_add(
+                    100, self.restore_grid_anchor, grid_state[1]
+                )
+            elif position is not None:
                 self.schedule_search_scroll_restore(position, category)
             return
         if not self.searching:
             self.search_scroll_position = self.scroller.get_vadjustment().get_value()
             self.search_scroll_category = self.active_category
             self.search_selected_index = self.selected_index
+            if self.display_emojis:
+                row = self.rows.get_item(self.emoji_rows[self.selected_index])
+                self.search_grid_state = (
+                    self.emojis_per_row,
+                    self.get_grid_anchor(),
+                    row.category,
+                    self.display_emojis[self.selected_index]["char"],
+                )
             self.nav_items[self.active_category].set_active(False)
             self.nav_icons[self.active_category].add_css_class("dim-label")
         self.searching = True
         self.display_emojis = emojis.search(query)
         self.emoji_rows = {}
-        rows = [PickerRow("search", f"Results for “{query}”")]
+        title = (
+            f"Results for “{query}”"
+            if self.display_emojis
+            else f"No matches for “{query}”"
+        )
+        rows = [PickerRow("search", title)]
         for offset in range(0, len(self.display_emojis), self.emojis_per_row):
             chunk = self.display_emojis[offset : offset + self.emojis_per_row]
             rows.append(PickerRow("search", None, chunk, offset))
             for index in range(offset, offset + len(chunk)):
                 self.emoji_rows[index] = len(rows) - 1
-        if not self.display_emojis:
-            rows.append(PickerRow("search", "No matching emoji"))
         self.replace_rows(rows)
 
     def replace_rows(self, rows, reset_scroll=True):
         self.cancel_search_scroll_restore()
-        if self.pending_category_restore is not None:
-            GLib.source_remove(self.pending_category_restore)
-            self.pending_category_restore = None
+        if self.pending_grid_restore is not None:
+            GLib.source_remove(self.pending_grid_restore)
+            self.pending_grid_restore = None
         if self.pending_scroll_update is not None:
             GLib.source_remove(self.pending_scroll_update)
             self.pending_scroll_update = None
@@ -611,6 +743,7 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
             button.set_hexpand(True)
             button.add_css_class("emoji-cell")
             button.set_focusable(False)
+            button.set_child(EmojiLabel())
             button.emoji_index = None
             button.connect("clicked", self.on_bound_button_clicked)
             box.append(button)
@@ -623,7 +756,7 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
                 continue
             if offset >= len(row.entries):
                 button.emoji_index = None
-                button.set_label("")
+                button.get_child().set_text("")
                 button.set_tooltip_text(None)
                 button.set_sensitive(False)
                 button.remove_css_class("keyboard-selected")
@@ -632,7 +765,8 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
             emoji = row.entries[offset]
             index = row.start_index + offset
             button.emoji_index = index
-            button.set_label(self.get_skintone_char(emoji))
+            button.get_child().set_text(self.get_skintone_char(emoji))
+            button.get_child().set_attributes(self.emoji_attributes)
             button.set_tooltip_text(emoji["name"])
             button.set_sensitive(True)
             button.set_visible(True)
@@ -819,6 +953,10 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
 
     def on_realize(self, _window):
         self.get_surface().connect("notify::state", self.on_active_changed)
+        x11_window.configure_picker(self.get_surface())
+
+    def on_map(self, _window):
+        x11_window.center_picker(self.get_surface())
 
     def on_active_changed(self, _window, _property):
         if self.is_active():
@@ -963,32 +1101,13 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
             return
         self.skintone_index = index
         user_data.update_skintone_index(index)
-        rows = [self.rows.get_item(i) for i in range(self.rows.get_n_items())]
-        scroll_position = self.scroller.get_vadjustment().get_value()
-        # Update current cells before replacing rows unbinds them.
-        for emoji_index, button in tuple(self.visible_buttons.items()):
-            if emoji_index < len(self.display_emojis):
-                button.set_label(
-                    self.get_skintone_char(self.display_emojis[emoji_index])
-                )
-
-        # Fresh row objects make Gtk.ListView rebind cells with the new tone.
-        refreshed_rows = [
-            PickerRow(row.category, row.title, row.entries, row.start_index)
-            for row in rows
-        ]
-        self.rows.splice(0, len(rows), refreshed_rows)
-        self.update_preview()
-        GLib.idle_add(self.restore_grid_scroll_position, scroll_position)
-
-    def restore_grid_scroll_position(self, position):
-        self.scroller.get_vadjustment().set_value(position)
-        return GLib.SOURCE_REMOVE
+        self.emojis_per_row = self.columns_for_width(self.scroller.last_width)
+        self.refresh_rows()
 
     def update_preview(self, index=None):
         if not self.display_emojis:
             self.preview_emoji.set_text("")
-            self.preview_name.set_text("No emoji")
+            self.preview_name.set_text("")
             return
         emoji = self.display_emojis[self.selected_index if index is None else index]
         self.preview_emoji.set_text(self.get_skintone_char(emoji))
@@ -999,30 +1118,68 @@ class EmojiPicker(PickerDialogs, Adw.ApplicationWindow):
             return
         emoji = self.get_skintone_char(self.display_emojis[index])
         self.appended.append(emoji)
-        self.copy_to_clipboard("".join(self.appended))
+        if not restoration_enabled():
+            self.copy_to_clipboard("".join(self.appended))
         user_data.update_recent_emojis(emoji)
         self.recent_dirty = True
-        self.selection_label.set_text("".join(self.appended))
+        shown = self.appended[-4:]
+        hidden = len(self.appended) - len(shown)
+        self.selection_count_label.set_text(f"+{hidden}" if hidden else "")
+        self.selection_count_label.set_visible(hidden > 0)
+        self.selection_label.set_text("".join(shown))
+        self.selection_box.set_tooltip_text("".join(self.appended))
         self.selection_label.set_visible(True)
+        self.selection_box.set_visible(True)
 
     def select_emoji(self, index):
-        if self.waiting_for_wayland_setup:
+        if self.waiting_for_wayland_setup or self.selection_pending:
             return
         emoji = self.get_skintone_char(self.display_emojis[index])
         content = "".join(self.appended) + emoji
-        self.copy_to_clipboard(content)
-        user_data.update_recent_emojis(emoji)
-        self.recent_dirty = True
-        self.get_application().close_picker_window()
-        if config.is_wayland:
-            if user_data.load_wayland_auto_paste_choice() is True:
-                GLib.timeout_add(150, self.get_application().paste_wayland)
-        elif user_data.load_x11_auto_paste_enabled():
-            GLib.timeout_add(150, self.paste_x11)
+        self.selection_pending = True
+        self.root.set_sensitive(False)
+
+        def copied(paste_sent, error):
+            if not self.selection_pending:
+                return
+            self.selection_pending = False
+            self.root.set_sensitive(True)
+            if error is not None:
+                dialog = Adw.AlertDialog.new(
+                    "Could not save the clipboard",
+                    f"{error}\n\nYour clipboard has not been replaced. "
+                    "Try again or turn off Restore clipboard in Preferences.",
+                )
+                dialog.add_response("close", "Close")
+                self.show_dialog(dialog)
+                return
+            user_data.update_recent_emojis(emoji)
+            self.recent_dirty = True
+            self.get_application().close_picker_window()
+            if config.is_wayland:
+                if user_data.load_wayland_auto_paste_choice() is True:
+                    GLib.timeout_add(
+                        150, self.get_application().paste_wayland, paste_sent
+                    )
+            elif user_data.load_x11_auto_paste_enabled():
+                GLib.timeout_add(150, self.paste_x11, paste_sent)
+
+        self.clipboard_restore.copy(content, copied)
 
     def copy_to_clipboard(self, content):
         Gdk.Display.get_default().get_clipboard().set(content)
 
-    def paste_x11(self):
-        subprocess.Popen(["xdotool", "key", "ctrl+v"])
+    def paste_x11(self, paste_sent=None):
+        if not user_data.load_x11_auto_paste_enabled() or getattr(
+            paste_sent, "cancelled", False
+        ):
+            return GLib.SOURCE_REMOVE
+        process = subprocess.Popen(["xdotool", "key", "ctrl+v"])
+
+        def finished(_pid, status):
+            process.returncode = os.waitstatus_to_exitcode(status)
+            if process.returncode == 0 and paste_sent is not None:
+                paste_sent()
+
+        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, process.pid, finished)
         return GLib.SOURCE_REMOVE

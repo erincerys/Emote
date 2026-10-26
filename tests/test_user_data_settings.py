@@ -35,6 +35,8 @@ class SettingsFileTests(TestCase):
         user_data.update_x11_auto_paste_enabled(False)
         user_data.update_wayland_auto_paste_choice(True)
         user_data.update_shown_welcome()
+        user_data.update_restore_clipboard_enabled(True)
+        user_data.update_emoji_font("system")
 
         self.assertEqual(user_data.load_accelerator(), "<Super>period")
         self.assertEqual(user_data.load_skintone_index(), 3)
@@ -43,6 +45,8 @@ class SettingsFileTests(TestCase):
         self.assertFalse(user_data.load_x11_auto_paste_enabled())
         self.assertTrue(user_data.load_wayland_auto_paste_choice())
         self.assertTrue(user_data.load_shown_welcome())
+        self.assertTrue(user_data.load_restore_clipboard_enabled())
+        self.assertEqual(user_data.load_emoji_font(), "system")
         self.assertTrue(self.settings_path.read_text().endswith("\n"))
 
     def test_hand_edits_are_read_without_restart(self):
@@ -88,7 +92,7 @@ class SettingsFileTests(TestCase):
 
         self.assertEqual(user_data.load_skintone_index(), 0)
         self.assertEqual(user_data.load_emoji_size(), 28)
-        self.assertEqual(user_data.load_picker_size(), (460, 300))
+        self.assertEqual(user_data.load_picker_size(), user_data.MIN_PICKER_SIZE)
 
     def test_unreadable_file_is_kept_as_backup_on_save(self):
         self.write_settings("{not json\n")
@@ -111,6 +115,7 @@ class SettingsFileTests(TestCase):
             db["picker_size"] = (700, 600)
             db["x11_auto_paste"] = False
             db["shown_welcome"] = True
+            db["emoji_font"] = "system"
             db["recent_emojis"] = ["🧪"]
 
         self.assertEqual(user_data.load_accelerator(), "<Primary><Alt>x")
@@ -124,6 +129,7 @@ class SettingsFileTests(TestCase):
                 "picker_size": [700, 600],
                 "x11_auto_paste": False,
                 "shown_welcome": True,
+                "emoji_font": "system",
             },
         )
         self.assertEqual(user_data.load_recent_emojis(), ["🧪"])

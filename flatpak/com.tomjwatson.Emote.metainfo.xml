@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>com.tomjwatson.Emote</id>
   <name>Emote</name>
-  <summary>Modern popup emoji picker</summary>
+  <summary>Popup emoji picker</summary>
   <url type="homepage">https://github.com/tom-james-watson/Emote</url>
   <url type="bugtracker">https://github.com/tom-james-watson/Emote/issues</url>
   <url type="vcs-browser">https://github.com/tom-james-watson/Emote</url>
@@ -16,41 +16,114 @@
 
   <description>
     <p>
-      Modern popup emoji picker for Linux with fast search, category navigation, and keyboard control.
+      Emote is a popup emoji picker for Linux. Open it with a keyboard shortcut, then search by name or browse the categories. Select an emoji to copy it, or turn on automatic paste to insert it into the app you’re using.
     </p>
     <p>
-      Written in GTK4, Emote offers a continuous emoji catalogue with category navigation.
-    </p>
-    <p>
-      On X11, launch the picker with the configurable keyboard shortcut Ctrl+Alt+E. On supported Wayland desktops, Emote can register Ctrl+Alt+E through the Global Shortcuts portal. Selected emojis are copied to the clipboard and, when automatic paste is enabled, pasted into the previously focused app.
-    </p>
-    <ul>
-      <li>🍾 Built as a popup: quick invocation, and disappears when not needed, does not stay as a standalone window</li>
-      <li>🫠 Provide a large and up-to-date list of emojis retrieved from openmoji.org</li>
-      <li>🧠 Shows the last used emojis by default</li>
-      <li>📜 Scroll continuously through categories or select one to jump to it</li>
-      <li>🔎 Search text box automatically focused and ready to type when invoked</li>
-      <li>⌨️ Can use shortcuts to navigate and select emojis</li>
-      <li>✒️ Optional automatic paste into the previous app on X11 and supported Wayland desktops</li>
-    </ul>
-    <p>
-      Please note that:
-    </p>
-    <p>
-      On X11, Emote includes a configurable shortcut to open the picker.
-    </p>
-    <p>
-      🪟 On Wayland, Emote offers global shortcut setup the first time it opens. If skipped, setup remains available in Keyboard Shortcuts. Saved shortcuts can be changed in the desktop’s shortcut settings. Automatic paste separately requires keyboard-control permission, while copy-only mode needs no permission.
+      Your recently used emojis stay at the top. You can select several emojis at once, choose a skin tone, and change the emoji size and font.
     </p>
   </description>
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/tom-james-watson/Emote/master/images/screenshot.png</image>
+      <image>https://raw.githubusercontent.com/tom-james-watson/Emote/29d72152629d3101ed5825455890cca3cce23a82/images/screenshot-dark.png</image>
+      <caption>Browse emojis in dark mode</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/tom-james-watson/Emote/29d72152629d3101ed5825455890cca3cce23a82/images/screenshot-search.png</image>
+      <caption>Search for dog emojis</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/tom-james-watson/Emote/29d72152629d3101ed5825455890cca3cce23a82/images/screenshot-preferences.png</image>
+      <caption>Customize emoji appearance and automatic paste in Preferences</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/tom-james-watson/Emote/29d72152629d3101ed5825455890cca3cce23a82/images/screenshot-light.png</image>
+      <caption>Browse emojis in light mode</caption>
     </screenshot>
   </screenshots>
 
   <releases>
+    <release type="stable" version="5.1.0" date="2026-10-21T00:00:00Z">
+      <description>
+        <ul>
+          <li>Restore clipboard after automatic paste. Enable “Restore clipboard” in Preferences to preserve what you copied before inserting an emoji. Off by default. Not available in GNOME Wayland.</li>
+          <li>Native keyboard shortcut keycaps in the Keyboard Shortcuts dialog.</li>
+        </ul>
+      </description>
+      <issues>
+        <issue url="https://github.com/tom-james-watson/Emote/issues/206">206</issue>
+      </issues>
+    </release>
+    <release type="stable" version="5.0.1" date="2026-10-19T00:00:00Z">
+      <description>
+        <p>Fix picker placement and taskbar integration on X11.</p>
+        <ul>
+          <li>Center the picker on the monitor containing the pointer when opened.</li>
+          <li>Keep the picker out of the taskbar.</li>
+        </ul>
+      </description>
+    </release>
+    <release type="stable" version="5.0.0" date="2026-10-19T00:00:00Z">
+      <description>
+        <ul>
+          <li>Redesign the picker with GTK4 and libadwaita</li>
+          <li>Add global shortcut setup and optional automatic paste on supported Wayland desktops</li>
+          <li>Update emojis through Unicode 18 and bundle Noto with a system font option</li>
+          <li>Allow resizing the picker and improve search and multi-emoji selection</li>
+        </ul>
+      </description>
+    </release>
+    <release type="development" version="5.0.0~beta8" date="2026-10-16T00:00:00Z">
+      <description>
+        <ul>
+          <li>Restore saved Wayland shortcuts after restart and reboot on Plasma 6.7</li>
+        </ul>
+      </description>
+    </release>
+    <release type="development" version="5.0.0~beta7" date="2026-10-15T00:00:00Z">
+      <description>
+        <ul>
+          <li>Add Quit Emote to the menu and Ctrl+Q to exit the application</li>
+        </ul>
+      </description>
+    </release>
+    <release type="development" version="5.0.0~beta6" date="2026-10-15T00:00:00Z">
+      <description>
+        <ul>
+          <li>Fix search keywords being joined together when combining tag lists</li>
+          <li>Add search keywords for the Unicode 18 emojis</li>
+        </ul>
+      </description>
+    </release>
+    <release type="development" version="5.0.0~beta5" date="2026-10-03T00:00:00Z">
+      <description>
+        <ul>
+          <li>Update search results without waiting for a typing delay</li>
+          <li>Show a single message when a search has no matches</li>
+          <li>Simplify the bundled font option to Noto</li>
+        </ul>
+      </description>
+    </release>
+    <release type="development" version="5.0.0~beta4" date="2026-10-03T00:00:00Z">
+      <description>
+        <ul>
+          <li>Use fixed emoji cell widths without scanning the catalogue</li>
+          <li>Keep split system-font sequences inside their grid cells</li>
+        </ul>
+      </description>
+    </release>
+    <release type="development" version="5.0.0~beta3" date="2026-10-03T00:00:00Z">
+      <description>
+        <ul>
+          <li>Allow resizing the picker while preserving the selected emoji and scroll position</li>
+          <li>Bundle Noto Color Emoji with Unicode 18 support and add a system font option</li>
+          <li>Prevent horizontal overflow with older system emoji fonts</li>
+          <li>Show selected emojis at full opacity with a count for additional selections</li>
+          <li>Use temporary keyboard control on GNOME and reuse the session on KDE</li>
+          <li>Explain when the desktop stops automatic paste</li>
+        </ul>
+      </description>
+    </release>
     <release type="development" version="5.0.0~beta2" date="2026-10-02T00:00:00Z">
       <description>
         <ul>

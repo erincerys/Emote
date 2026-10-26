@@ -29,6 +29,7 @@ DEFAULT_ACCELERATOR = "<Primary><Alt>e"
 
 WAYLAND_AUTO_PASTE = "wayland_auto_paste"
 X11_AUTO_PASTE = "x11_auto_paste"
+RESTORE_CLIPBOARD = "restore_clipboard"
 WAYLAND_GLOBAL_SHORTCUT = "wayland_global_shortcut"
 WAYLAND_GLOBAL_SHORTCUT_LABEL = "wayland_global_shortcut_label"
 SHOWN_WELCOME = "shown_welcome"
@@ -39,6 +40,7 @@ SKINTONES = ["✋", "✋🏻", "✋🏼", "✋🏽", "✋🏾", "✋🏿"]
 
 PICKER_SIZE = "picker_size"
 DEFAULT_PICKER_SIZE = (515, 500)
+MIN_PICKER_SIZE = (356, 300)
 
 EMOJI_SIZE = "emoji_size"
 DEFAULT_EMOJI_SIZE = 28
@@ -50,6 +52,10 @@ EMOJI_SIZE_LABELS = (
     "Large (32 px)",
     "Extra large (36 px)",
 )
+
+EMOJI_FONT = "emoji_font"
+EMOJI_FONTS = ("noto", "system")
+EMOJI_FONT_LABELS = ("Noto", "System")
 
 SHORTCUTS = "shortcuts"
 DEFAULT_SHORTCUTS = {
@@ -66,6 +72,8 @@ DEFAULT_SETTINGS = {
     PICKER_SIZE: list(DEFAULT_PICKER_SIZE),
     X11_AUTO_PASTE: True,
     WAYLAND_AUTO_PASTE: None,
+    RESTORE_CLIPBOARD: False,
+    EMOJI_FONT: EMOJI_FONTS[0],
     SHOWN_WELCOME: False,
     SHORTCUTS: DEFAULT_SHORTCUTS,
 }
@@ -77,6 +85,8 @@ SHELVE_KEY_TO_SETTING = {
     PICKER_SIZE: PICKER_SIZE,
     X11_AUTO_PASTE: X11_AUTO_PASTE,
     WAYLAND_AUTO_PASTE: WAYLAND_AUTO_PASTE,
+    RESTORE_CLIPBOARD: RESTORE_CLIPBOARD,
+    EMOJI_FONT: EMOJI_FONT,
     SHOWN_WELCOME: SHOWN_WELCOME,
 }
 
@@ -191,6 +201,14 @@ def load_wayland_global_shortcut_choice():
         return db.get(WAYLAND_GLOBAL_SHORTCUT)
 
 
+def load_restore_clipboard_enabled():
+    return _read_setting(RESTORE_CLIPBOARD, bool)
+
+
+def update_restore_clipboard_enabled(enabled):
+    _update_setting(RESTORE_CLIPBOARD, bool(enabled))
+
+
 def update_wayland_global_shortcut_choice(enabled):
     with shelve.open(SHELVE_PATH) as db:
         db[WAYLAND_GLOBAL_SHORTCUT] = bool(enabled)
@@ -217,7 +235,7 @@ def update_shown_welcome():
 def normalize_picker_size(size):
     try:
         width, height = size
-        return max(460, int(width)), max(300, int(height))
+        return max(MIN_PICKER_SIZE[0], int(width)), max(MIN_PICKER_SIZE[1], int(height))
     except (TypeError, ValueError):
         return DEFAULT_PICKER_SIZE
 
@@ -248,6 +266,15 @@ def update_emoji_size(size):
 def load_skintone_index():
     index = _read_setting(SKINTONE_INDEX, int)
     return index if 0 <= index < len(SKINTONES) else DEFAULT_SKINTONE_INDEX
+
+
+def load_emoji_font():
+    font = _read_setting(EMOJI_FONT, str)
+    return font if font in EMOJI_FONTS else EMOJI_FONTS[0]
+
+
+def update_emoji_font(font):
+    _update_setting(EMOJI_FONT, font if font in EMOJI_FONTS else EMOJI_FONTS[0])
 
 
 def update_skintone_index(skintone):

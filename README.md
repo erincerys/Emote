@@ -2,11 +2,6 @@
 
 Emote is a popup emoji picker for Linux, built with GTK4 and libadwaita.
 
-> [!IMPORTANT]
-> **Call for testers!**
->
-> Emote 5.0 is a major update with several big improvements. It needs your help to test it and verify it's ready for release. Please [try the beta and share feedback](https://github.com/tom-james-watson/Emote/issues/199).
-
 <p align="center">
   <img width="500" src="images/screenshot-dark.png" alt="Emote emoji picker in dark mode">
 </p>
@@ -48,7 +43,7 @@ Start typing to search, or browse the categories. Click an emoji or press `Enter
 
 To select several emojis, right-click each one or press `Shift+Enter`. Click the final emoji or press `Enter` to finish the selection and close the picker.
 
-Open **Preferences** to change the emoji size or skin tone.
+Open **Preferences** to change the emoji size, skin tone, or font. Emote includes Noto Color Emoji with Unicode 18 support; choose **System** to use your desktop's emoji font.
 
 ### Keyboard shortcuts
 
@@ -61,6 +56,7 @@ Open **Preferences** to change the emoji size or skin tone.
 | Next category | `Ctrl+Tab` |
 | Previous category | `Ctrl+Shift+Tab` |
 | Close the picker | `Escape` |
+| Quit Emote | `Ctrl+Q` |
 
 You can change the search, category and close shortcuts in the [settings file](#settings-file).
 
@@ -82,6 +78,8 @@ Emote creates the file with these defaults the first time it starts:
   "picker_size": [515, 500],
   "x11_auto_paste": true,
   "wayland_auto_paste": null,
+  "restore_clipboard": false,
+  "emoji_font": "noto",
   "shown_welcome": false,
   "shortcuts": {
     "focus_search": "<Primary>f",
@@ -96,6 +94,8 @@ Emote creates the file with these defaults the first time it starts:
 - `skintone_index` runs from `0` (no skin tone) to `5`.
 - `emoji_size` is one of `20`, `24`, `28`, `32` or `36`.
 - `wayland_auto_paste` stays `null` until you choose a paste mode during Wayland setup.
+- `restore_clipboard` puts your previous clipboard back after an automatic paste.
+- `emoji_font` is `noto` (the bundled Noto Color Emoji) or `system`.
 - Set `shown_welcome` to `true` to skip the picker that opens on first launch.
 - `shortcuts` holds the picker's own shortcuts in GTK accelerator syntax: modifiers such as `<Primary>`, `<Shift>`, `<Alt>` or `<Super>`, then a key name such as `Tab`, `Escape` or `n`. A shortcut without a modifier also fires while you type in the search box. Emote falls back to the default for any shortcut it cannot parse.
 
@@ -107,7 +107,7 @@ Restart Emote after editing the file. Emote only rewrites the keys it changes, s
 
 On **X11**, Emote handles the global shortcut itself. Change it from **Keyboard Shortcuts** in Emote.
 
-On **Wayland**, your desktop manages the shortcut through its Global Shortcuts portal. Emote offers to set this up the first time you open the picker. You can skip setup and keep an existing manual shortcut, or set it up later from **Keyboard Shortcuts**. To change or enable a registered shortcut, use your desktop's shortcut settings.
+On **Wayland**, your desktop manages the shortcut through its Global Shortcuts portal. Emote offers to set this up the first time you open the picker. You can skip setup and keep an existing manual shortcut, or set it up later from **Keyboard Shortcuts**. Once a keyboard shortcut is set in the app, you need to update it in your desktop's shortcut settings as Wayland currently provides no way to update it from Emote.
 
 If your desktop does not support the portal, configure a shortcut manually using the [Wayland shortcut guide](https://github.com/tom-james-watson/Emote/wiki/Hotkey-In-Wayland).
 
@@ -115,9 +115,9 @@ If your desktop does not support the portal, configure a shortcut manually using
 
 Automatic paste is optional on both X11 and Wayland. Turn it on or off in **Preferences**. It is on by default on X11.
 
-On **Wayland**, it also needs your desktop's permission to control the keyboard. Emote offers to enable it during setup. On GNOME, allow “Remote Interaction” when prompted. Emote requests keyboard control, not screen access.
+On **Wayland**, it also needs your desktop's permission to control the keyboard. Emote offers to enable it during setup. On GNOME, allow “Remote Interaction” when prompted.
 
-If automatic paste is disabled or unavailable, your selection is still copied to the clipboard.
+Enable **Restore clipboard** in Preferences to keep what you copied before inserting an emoji. It’s off by default and available with automatic paste, except on GNOME Wayland. Allow **Clipboard Access** if prompted.
 
 ### Login startup
 
@@ -133,4 +133,4 @@ See the [development guide](docs/development.md) for running from source, debugg
 
 Emote is licensed under the [GNU GPL v3 or later](LICENSE.md).
 
-Emoji data comes from [OpenMoji](https://openmoji.org/). Category icons include artwork from [Lucide](https://lucide.dev/); see the [bundled icon license](static/icons/LICENSE).
+Emoji data comes from [OpenMoji](https://openmoji.org/). [Noto Color Emoji](https://github.com/googlefonts/noto-emoji) is bundled under the [SIL Open Font License](static/fonts/LICENSE). Category icons include artwork from [Lucide](https://lucide.dev/); see the [bundled icon license](static/icons/LICENSE).

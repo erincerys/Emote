@@ -47,6 +47,12 @@ These tests use the GTK and libadwaita system packages listed above, but do not 
 pipenv run python -m unittest tests.test_wayland_shortcut -v
 ```
 
+## Testing in desktop VMs
+
+For native desktop, compositor and packaged-app checks, see
+[Testing in desktop VMs](vm-testing.md). It covers creating or reusing the test
+VMs, X11/Wayland sessions, package checks and screenshots.
+
 ## Debugging with GtkInspector
 
 Launch Emote with the interactive inspector:
@@ -112,7 +118,7 @@ To refresh the bundled emoji catalogue from [OpenMoji](https://openmoji.org/):
 make update-emojis
 ```
 
-The source is OpenMoji's [emoji data CSV](https://raw.githubusercontent.com/hfg-gmuend/openmoji/master/data/openmoji.csv). The updater currently includes emoji through Unicode 17.0 so newer characters that are not yet supported by common system emoji fonts do not appear as missing-glyph boxes.
+The source is OpenMoji's [emoji data CSV](https://raw.githubusercontent.com/hfg-gmuend/openmoji/master/data/openmoji.csv). The updater includes emoji through Unicode 18.0, supported by the bundled Noto Color Emoji font.
 
 ## Formatting
 
